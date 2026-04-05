@@ -8,9 +8,18 @@ mod riot_api;
 mod db;
 mod routes;
 
+#[derive(Debug, Clone)]
+pub struct AiCoachConfig {
+    pub api_key: String,
+    pub base_url: String,
+    pub model: String,
+    pub max_tokens: u32,
+}
+
 pub struct AppState {
     pub riot_api: riot_api::RiotApiClient,
     pub db: db::Db,
+    pub ai_coach_config: Option<AiCoachConfig>,
 }
 
 async fn health() -> &'static str {
@@ -42,9 +51,27 @@ async fn main() {
 
     log::info!("Database connected and migrated");
 
+    // AI Coach config (optional — server works without it)
+    let ai_coach_config = std::env::var("ANTHROPIC_AUTH_TOKEN")
+        .ok()
+        .filter(|k| !k.is_empty())
+        .map(|api_key| {
+            let base_url = std::env::var("ANTHROPIC_BASE_URL")
+                .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
+            let model = std::env::var("ANTHROPIC_MODEL")
+                .unwrap_or_else(|_| "claude-sonnet-4-20250514".to_string());
+            log::info!("AI Coach enabled (model: {})", model);
+            AiCoachConfig { api_key, base_url, model, max_tokens: 1024 }
+        });
+
+    if ai_coach_config.is_none() {
+        log::warn!("ANTHROPIC_AUTH_TOKEN not set — AI Coach disabled");
+    }
+
     let state = Arc::new(AppState {
         riot_api: riot_api::RiotApiClient::new(api_key),
         db: db::Db::new(pool),
+        ai_coach_config,
     });
 
     let cors = CorsLayer::new()
@@ -62,6 +89,8 @@ async fn main() {
         .route("/api/matches/{match_id}", get(routes::matches::get_match_detail))
         // Live game enrichment
         .route("/api/live/enrich", post(routes::live::enrich_live_game))
+        // AI Coach streaming
+        .route("/api/coach/stream", post(routes::coach::stream_coach))
         .layer(cors)
         .with_state(state);
 

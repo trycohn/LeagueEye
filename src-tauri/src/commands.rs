@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::State;
 
-use crate::ai_coach::{self, AiCoachConfig, CoachState};
+use crate::ai_coach::{self, CoachState};
 use crate::api_client::{ServerApiClient, EnrichLiveRequest, EnrichLivePlayer};
 use crate::db::Db;
 use crate::lcu;
@@ -442,14 +442,9 @@ pub async fn get_champion_stats(
 pub async fn request_coaching(
     app: tauri::AppHandle,
     api: State<'_, ServerApiClient>,
-    coach_config: State<'_, AiCoachConfig>,
     coach_state: State<'_, Arc<Mutex<CoachState>>>,
     champ_cache: State<'_, Arc<Mutex<ChampionNamesCache>>>,
 ) -> Result<(), String> {
-    if coach_config.api_key.is_empty() {
-        return Err("ANTHROPIC_AUTH_TOKEN не настроен. Добавьте в переменные окружения или .env файл.".to_string());
-    }
-
     // Prevent concurrent requests
     {
         let mut state = coach_state.lock().map_err(|e| e.to_string())?;
@@ -514,13 +509,11 @@ pub async fn request_coaching(
             }
         }
 
-        // Enrich ranks via server for my team
-        // (We need ranks for coach context)
+        // Enrich ranks via server (needed for coach context)
         let my_puuid = my_team_players.iter()
             .find(|p| p.puuid.is_some())
             .and_then(|p| p.puuid.clone());
 
-        // Build players for enrichment
         let enrich_players: Vec<EnrichLivePlayer> = my_team_players.iter().chain(enemy_team_players.iter())
             .map(|p| EnrichLivePlayer {
                 puuid: p.puuid.clone(),
@@ -589,13 +582,13 @@ pub async fn request_coaching(
         state.last_state_hash = state_hash;
     }
 
-    // Spawn streaming task
-    let config = coach_config.inner().clone();
+    // Spawn streaming task — sends context to server, server calls Anthropic
+    let api_client = api.inner().clone();
     let coach_state_arc = Arc::clone(&*coach_state);
     let app_handle = app.clone();
 
     tokio::spawn(async move {
-        let _ = ai_coach::stream_coaching_advice(app_handle, ctx, &config).await;
+        let _ = api_client.stream_coaching(&app_handle, &ctx).await;
         if let Ok(mut s) = coach_state_arc.lock() {
             s.is_requesting = false;
         }

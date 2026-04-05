@@ -57,9 +57,16 @@ RIOT_API_KEY=RGAPI-твой-ключ-с-developer.riotgames.com
 DATABASE_URL=postgres://leagueeye:придумай_пароль@localhost/leagueeye
 PORT=3000
 RUST_LOG=info
+
+# AI Coach (опционально — сервер работает и без него)
+ANTHROPIC_AUTH_TOKEN=твой-ключ-anthropic
+ANTHROPIC_BASE_URL=https://api.anthropic.com
+ANTHROPIC_MODEL=claude-sonnet-4-6
 ```
 
 > **Важно:** Riot API ключ разработчика истекает каждые 24 часа. Для постоянного сервера нужен Production ключ (подавать заявку на developer.riotgames.com).
+
+> **AI Coach:** Если `ANTHROPIC_AUTH_TOKEN` не задан, сервер запустится нормально — просто AI тренер будет недоступен. При нажатии «Получить совет» клиент покажет ошибку.
 
 ### Сборка и запуск
 
@@ -157,8 +164,9 @@ sudo ufw allow 443/tcp     # с Caddy (HTTPS)
 | `server/src/routes/players.rs` | Поиск игрока, мастерство, история матчей |
 | `server/src/routes/matches.rs` | Детали матча |
 | `server/src/routes/live.rs` | Обогащение live game данных рангами |
+| `server/src/routes/coach.rs` | AI Coach — SSE стрим с Anthropic API |
 | `server/migrations/` | SQL миграции (запускаются автоматически) |
-| `server/.env` | RIOT_API_KEY, DATABASE_URL, PORT |
+| `server/.env` | RIOT_API_KEY, DATABASE_URL, PORT, ANTHROPIC_* |
 
 ### API эндпоинты сервера
 
@@ -171,6 +179,7 @@ sudo ufw allow 443/tcp     # с Caddy (HTTPS)
 | `/api/players/{puuid}/matches?offset=15&limit=15` | GET | Пагинация матчей |
 | `/api/matches/{matchId}` | GET | Детали матча (10 игроков) |
 | `/api/live/enrich` | POST | Клиент шлёт LCU данные → сервер добавляет ранги |
+| `/api/coach/stream` | POST | Клиент шлёт контекст игры → SSE стрим с AI советами |
 
 ---
 
@@ -187,12 +196,11 @@ sudo ufw allow 443/tcp     # с Caddy (HTTPS)
 `src-tauri/.env`:
 ```env
 LEAGUEEYE_SERVER_URL=http://ip-твоего-сервера:3000
-ANTHROPIC_AUTH_TOKEN=твой-ключ-если-нужен-ai-coach
-ANTHROPIC_BASE_URL=https://api.anthropic.com
-ANTHROPIC_MODEL=claude-sonnet-4-6
 ```
 
 > Если сервер за Caddy с HTTPS: `LEAGUEEYE_SERVER_URL=https://leagueeye.твой-домен.ru`
+
+> **Примечание:** API ключи (Riot, Anthropic) больше НЕ нужны на клиенте — они хранятся только на сервере.
 
 ### Сборка EXE
 
@@ -214,10 +222,10 @@ npm run tauri build
 
 | Файл | Что делает |
 |---|---|
-| `src-tauri/src/api_client.rs` | HTTP клиент к серверу (заменяет Riot API) |
+| `src-tauri/src/api_client.rs` | HTTP клиент к серверу (все данные + AI Coach SSE) |
 | `src-tauri/src/commands.rs` | Tauri команды: LCU локально + HTTP к серверу |
 | `src-tauri/src/lcu.rs` | Детекция League Client (lockfile, champ select, gameflow) |
-| `src-tauri/src/ai_coach.rs` | AI coaching (стриминг через Anthropic API) |
+| `src-tauri/src/ai_coach.rs` | Сбор контекста игры для AI Coach (промпты и стриминг — на сервере) |
 | `src-tauri/src/db.rs` | Мини SQLite — только кеш последнего аккаунта |
 | `src-tauri/src/lib.rs` | Tauri setup, overlay, keyboard hook |
 | `src/` | React фронтенд (без изменений) |
@@ -238,6 +246,7 @@ npm run tauri build
 - Детали матча → все 10 игроков
 - Мастерство чемпионов
 - Live game enrichment → ранги всех игроков в текущей игре
+- AI Coach → контекст игры отправляется на сервер, стриминг советов обратно через SSE
 
 ---
 
@@ -260,7 +269,7 @@ npm run tauri build
 # Терминал 1 — сервер
 cd LeagueEye
 cp server/.env.example server/.env
-# Отредактировать server/.env — вписать RIOT_API_KEY и DATABASE_URL
+# Отредактировать server/.env — вписать RIOT_API_KEY, DATABASE_URL, ANTHROPIC_AUTH_TOKEN
 cargo run -p leagueeye-server
 
 # Терминал 2 — клиент
@@ -300,3 +309,5 @@ npm run tauri build
 | Миграции не запустились | Проверь DATABASE_URL, права пользователя PostgreSQL |
 | Нет данных в live game | Убедись что League Client запущен и ты в игре/champ select |
 | Нет рангов в live game | Сервер недоступен — клиент покажет данные без рангов (fallback) |
+| AI Coach не работает | Проверь `ANTHROPIC_AUTH_TOKEN` в `server/.env`. Лог: `journalctl -u leagueeye -f` |
+| AI Coach: «не настроен на сервере» | `ANTHROPIC_AUTH_TOKEN` не задан или пустой в `server/.env` |

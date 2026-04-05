@@ -5,7 +5,7 @@ mod db;
 mod lcu;
 mod models;
 
-use ai_coach::{AiCoachConfig, CoachState};
+use ai_coach::CoachState;
 use api_client::ServerApiClient;
 use commands::{ChampionNamesCache, LastLiveState};
 use db::Db;
@@ -173,24 +173,8 @@ pub fn run() {
 
     let client = ServerApiClient::new(server_url);
 
-    let ai_api_key = std::env::var("ANTHROPIC_AUTH_TOKEN")
-        .or_else(|_| std::env::var("AI_API_KEY"))
-        .unwrap_or_default();
-    let ai_base_url = std::env::var("ANTHROPIC_BASE_URL")
-        .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
-    let ai_model = std::env::var("ANTHROPIC_MODEL")
-        .or_else(|_| std::env::var("AI_MODEL"))
-        .unwrap_or_else(|_| "claude-sonnet-4-20250514".to_string());
-    let coach_config = AiCoachConfig {
-        api_key: ai_api_key,
-        base_url: ai_base_url,
-        model: ai_model,
-        max_tokens: 1024,
-    };
-
     tauri::Builder::default()
         .manage(client)
-        .manage(coach_config)
         .manage(Arc::new(Mutex::new(CoachState::new())))
         .manage(Arc::new(Mutex::new(ChampionNamesCache::new())))
         .manage(Arc::new(Mutex::new(LastLiveState::new())))

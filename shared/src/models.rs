@@ -477,6 +477,70 @@ pub fn dto_to_participants(m: &MatchDto) -> Vec<MatchParticipantDetail> {
 
 // --- Helper: convert MatchDto to MatchSummary ---
 
+// --- AI Coach DTOs ---
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CoachPlayerInfo {
+    pub champion_name: String,
+    pub position: String,
+    pub rank_display: String,
+    pub kills: i32,
+    pub deaths: i32,
+    pub assists: i32,
+    pub cs: i32,
+    pub level: i32,
+    pub items: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CoachingContext {
+    pub phase: String,
+    pub game_time_secs: Option<i64>,
+    pub my_champion: String,
+    pub my_position: String,
+    pub my_team: Vec<CoachPlayerInfo>,
+    pub enemy_team: Vec<CoachPlayerInfo>,
+    pub recent_events: Vec<String>,
+}
+
+impl CoachingContext {
+    pub fn compute_hash(&self) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        self.phase.hash(&mut hasher);
+        if let Some(t) = self.game_time_secs {
+            (t / 30).hash(&mut hasher);
+        }
+        for p in &self.my_team {
+            p.champion_name.hash(&mut hasher);
+            p.kills.hash(&mut hasher);
+            p.deaths.hash(&mut hasher);
+            p.assists.hash(&mut hasher);
+            p.cs.hash(&mut hasher);
+            p.level.hash(&mut hasher);
+        }
+        for p in &self.enemy_team {
+            p.champion_name.hash(&mut hasher);
+            p.kills.hash(&mut hasher);
+            p.deaths.hash(&mut hasher);
+            p.assists.hash(&mut hasher);
+            p.cs.hash(&mut hasher);
+            p.level.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CoachStreamPayload {
+    pub kind: String, // "start" | "delta" | "end" | "error"
+    pub text: Option<String>,
+}
+
 pub fn dto_to_summary(m: &MatchDto, puuid: &str, lp_delta_fn: impl Fn(&str, i64, i64) -> Option<i32>) -> Option<MatchSummary> {
     let p = m.info.participants.iter().find(|p| p.puuid == puuid)?;
     let cs = p.total_minions_killed + p.neutral_minions_killed.unwrap_or(0);

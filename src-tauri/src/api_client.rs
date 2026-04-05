@@ -1,4 +1,5 @@
 use reqwest::Client;
+use tauri::{AppHandle, Emitter};
 use leagueeye_shared::models::*;
 
 /// HTTP client that talks to the LeagueEye server.
@@ -104,6 +105,65 @@ impl ServerApiClient {
 
     pub async fn enrich_live_game(&self, request: &EnrichLiveRequest) -> Result<LiveGameData, String> {
         self.post("/api/live/enrich", request).await
+    }
+
+    // --- AI Coach streaming ---
+
+    pub async fn stream_coaching(
+        &self,
+        app: &AppHandle,
+        ctx: &CoachingContext,
+    ) -> Result<(), String> {
+        let url = format!("{}/api/coach/stream", self.base_url);
+
+        let response = self.client
+            .post(&url)
+            .json(ctx)
+            .send()
+            .await
+            .map_err(|e| {
+                let msg = format!("Ошибка соединения с сервером: {}", e);
+                let _ = app.emit("coach-stream", CoachStreamPayload {
+                    kind: "error".to_string(),
+                    text: Some(msg.clone()),
+                });
+                msg
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            let msg = format!("Ошибка сервера ({}): {}", status, body);
+            let _ = app.emit("coach-stream", CoachStreamPayload {
+                kind: "error".to_string(),
+                text: Some(msg.clone()),
+            });
+            return Err(msg);
+        }
+
+        // Read SSE stream from server and forward as Tauri events
+        let mut buffer = String::new();
+        let mut response = response;
+
+        while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(pos) = buffer.find("\n\n") {
+                let event_block = buffer[..pos].to_string();
+                buffer = buffer[pos + 2..].to_string();
+
+                for line in event_block.lines() {
+                    if let Some(data) = line.strip_prefix("data:") {
+                        let data = data.trim_start();
+                        if let Ok(payload) = serde_json::from_str::<CoachStreamPayload>(data) {
+                            let _ = app.emit("coach-stream", &payload);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
