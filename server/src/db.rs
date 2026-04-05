@@ -1,0 +1,433 @@
+use sqlx::PgPool;
+use leagueeye_shared::models::*;
+
+pub struct Db {
+    pool: PgPool,
+}
+
+impl Db {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    // --- Accounts ---
+
+    pub async fn save_account(&self, profile: &PlayerProfile) -> Result<(), sqlx::Error> {
+        let now = now_ms();
+        sqlx::query(
+            "INSERT INTO accounts (puuid, game_name, tag_line, profile_icon_id, summoner_level, last_seen)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (puuid) DO UPDATE SET
+                game_name = EXCLUDED.game_name,
+                tag_line = EXCLUDED.tag_line,
+                profile_icon_id = EXCLUDED.profile_icon_id,
+                summoner_level = EXCLUDED.summoner_level,
+                last_seen = EXCLUDED.last_seen"
+        )
+        .bind(&profile.puuid)
+        .bind(&profile.game_name)
+        .bind(&profile.tag_line)
+        .bind(profile.profile_icon_id)
+        .bind(profile.summoner_level)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_last_account(&self) -> Result<Option<StoredAccount>, sqlx::Error> {
+        let row = sqlx::query_as::<_, StoredAccountRow>(
+            "SELECT puuid, game_name, tag_line, profile_icon_id, summoner_level
+             FROM accounts ORDER BY last_seen DESC LIMIT 1"
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.into()))
+    }
+
+    // --- Matches ---
+
+    pub async fn get_cached_match_ids(&self, puuid: &str) -> Result<Vec<String>, sqlx::Error> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT match_id FROM matches WHERE puuid = $1 ORDER BY game_creation DESC"
+        )
+        .bind(puuid)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    pub async fn count_cached_matches(&self, puuid: &str) -> Result<i64, sqlx::Error> {
+        let (count,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM matches WHERE puuid = $1"
+        )
+        .bind(puuid)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count)
+    }
+
+    pub async fn get_cached_matches_paged(&self, puuid: &str, offset: i64, limit: i64) -> Result<Vec<MatchSummary>, sqlx::Error> {
+        let rows: Vec<MatchSummaryRow> = sqlx::query_as(
+            "SELECT match_id, champion_id, champion_name, win, kills, deaths, assists,
+                    cs, gold, damage, vision_score, position,
+                    game_duration, game_creation, queue_id, items, summoner_spells, lp_delta
+             FROM matches WHERE puuid = $1
+             ORDER BY game_creation DESC LIMIT $2 OFFSET $3"
+        )
+        .bind(puuid)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|r| r.into()).collect())
+    }
+
+    pub async fn save_matches(&self, puuid: &str, matches: &[MatchSummary]) -> Result<(), sqlx::Error> {
+        for m in matches {
+            sqlx::query(
+                "INSERT INTO matches
+                 (match_id, puuid, champion_id, champion_name, win, kills, deaths, assists,
+                  cs, gold, damage, vision_score, position,
+                  game_duration, game_creation, queue_id, items, summoner_spells, lp_delta)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+                 ON CONFLICT (match_id, puuid) DO NOTHING"
+            )
+            .bind(&m.match_id)
+            .bind(puuid)
+            .bind(m.champion_id)
+            .bind(&m.champion_name)
+            .bind(m.win)
+            .bind(m.kills)
+            .bind(m.deaths)
+            .bind(m.assists)
+            .bind(m.cs)
+            .bind(m.gold)
+            .bind(m.damage)
+            .bind(m.vision_score)
+            .bind(&m.position)
+            .bind(m.game_duration)
+            .bind(m.game_creation)
+            .bind(m.queue_id)
+            .bind(&m.items)
+            .bind(&m.summoner_spells)
+            .bind(m.lp_delta)
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    // --- Match participants ---
+
+    pub async fn save_match_participants(&self, match_id: &str, participants: &[MatchParticipantDetail]) -> Result<(), sqlx::Error> {
+        for p in participants {
+            sqlx::query(
+                "INSERT INTO match_participants
+                 (match_id, puuid, riot_id_name, riot_id_tagline, champion_id, champion_name,
+                  champ_level, team_id, win, kills, deaths, assists, cs, gold, damage,
+                  damage_taken, vision_score, wards_placed, wards_killed, position,
+                  items, summoner_spells, double_kills, triple_kills, quadra_kills, penta_kills)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
+                 ON CONFLICT (match_id, puuid) DO NOTHING"
+            )
+            .bind(match_id)
+            .bind(&p.puuid)
+            .bind(&p.riot_id_name)
+            .bind(&p.riot_id_tagline)
+            .bind(p.champion_id)
+            .bind(&p.champion_name)
+            .bind(p.champ_level)
+            .bind(p.team_id)
+            .bind(p.win)
+            .bind(p.kills)
+            .bind(p.deaths)
+            .bind(p.assists)
+            .bind(p.cs)
+            .bind(p.gold)
+            .bind(p.damage)
+            .bind(p.damage_taken)
+            .bind(p.vision_score)
+            .bind(p.wards_placed)
+            .bind(p.wards_killed)
+            .bind(&p.position)
+            .bind(&p.items)
+            .bind(&p.summoner_spells)
+            .bind(p.double_kills)
+            .bind(p.triple_kills)
+            .bind(p.quadra_kills)
+            .bind(p.penta_kills)
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn get_match_detail(&self, match_id: &str) -> Result<Option<MatchDetail>, sqlx::Error> {
+        let meta: Option<(i64, i64, i32)> = sqlx::query_as(
+            "SELECT game_duration, game_creation, queue_id FROM matches WHERE match_id = $1 LIMIT 1"
+        )
+        .bind(match_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let (game_duration, game_creation, queue_id) = match meta {
+            Some(m) => m,
+            None => return Ok(None),
+        };
+
+        let rows: Vec<MatchParticipantRow> = sqlx::query_as(
+            "SELECT puuid, riot_id_name, riot_id_tagline, champion_id, champion_name,
+                    champ_level, team_id, win, kills, deaths, assists, cs, gold, damage,
+                    damage_taken, vision_score, wards_placed, wards_killed, position,
+                    items, summoner_spells, double_kills, triple_kills, quadra_kills, penta_kills
+             FROM match_participants WHERE match_id = $1
+             ORDER BY team_id ASC"
+        )
+        .bind(match_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        if rows.is_empty() {
+            return Ok(None);
+        }
+
+        let participants: Vec<MatchParticipantDetail> = rows.into_iter().map(|r| r.into()).collect();
+
+        Ok(Some(MatchDetail {
+            match_id: match_id.to_string(),
+            game_duration,
+            game_creation,
+            queue_id,
+            participants,
+        }))
+    }
+
+    // --- Rank snapshots ---
+
+    pub async fn get_latest_ranks(&self, puuid: &str) -> Result<Vec<RankInfo>, sqlx::Error> {
+        let rows: Vec<RankRow> = sqlx::query_as(
+            "SELECT queue_type, tier, rank, lp, wins, losses
+             FROM rank_snapshots
+             WHERE puuid = $1 AND id IN (
+                 SELECT MAX(id) FROM rank_snapshots WHERE puuid = $1 GROUP BY queue_type
+             )"
+        )
+        .bind(puuid)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|r| r.into()).collect())
+    }
+
+    pub async fn get_lp_at(&self, puuid: &str, timestamp_ms: i64, before: bool) -> Result<Option<i32>, sqlx::Error> {
+        let row: Option<(i32,)> = if before {
+            sqlx::query_as(
+                "SELECT lp FROM rank_snapshots
+                 WHERE puuid = $1 AND queue_type = 'RANKED_SOLO_5x5' AND recorded_at <= $2
+                 ORDER BY recorded_at DESC LIMIT 1"
+            )
+            .bind(puuid)
+            .bind(timestamp_ms)
+            .fetch_optional(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as(
+                "SELECT lp FROM rank_snapshots
+                 WHERE puuid = $1 AND queue_type = 'RANKED_SOLO_5x5' AND recorded_at >= $2
+                 ORDER BY recorded_at ASC LIMIT 1"
+            )
+            .bind(puuid)
+            .bind(timestamp_ms)
+            .fetch_optional(&self.pool)
+            .await?
+        };
+        Ok(row.map(|r| r.0))
+    }
+
+    pub async fn save_rank_snapshot(&self, puuid: &str, ranks: &[RankInfo]) -> Result<(), sqlx::Error> {
+        let now = now_ms();
+        for r in ranks {
+            sqlx::query(
+                "INSERT INTO rank_snapshots
+                 (puuid, queue_type, tier, rank, lp, wins, losses, recorded_at)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)"
+            )
+            .bind(puuid)
+            .bind(&r.queue_type)
+            .bind(&r.tier)
+            .bind(&r.rank)
+            .bind(r.lp)
+            .bind(r.wins)
+            .bind(r.losses)
+            .bind(now)
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
+    }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
+// --- sqlx row types ---
+
+#[derive(sqlx::FromRow)]
+struct StoredAccountRow {
+    puuid: String,
+    game_name: String,
+    tag_line: String,
+    profile_icon_id: Option<i64>,
+    summoner_level: Option<i64>,
+}
+
+impl From<StoredAccountRow> for StoredAccount {
+    fn from(r: StoredAccountRow) -> Self {
+        StoredAccount {
+            puuid: r.puuid,
+            game_name: r.game_name,
+            tag_line: r.tag_line,
+            profile_icon_id: r.profile_icon_id.unwrap_or(0),
+            summoner_level: r.summoner_level.unwrap_or(0),
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct MatchSummaryRow {
+    match_id: String,
+    champion_id: Option<i64>,
+    champion_name: Option<String>,
+    win: Option<bool>,
+    kills: Option<i32>,
+    deaths: Option<i32>,
+    assists: Option<i32>,
+    cs: Option<i32>,
+    gold: Option<i32>,
+    damage: Option<i64>,
+    vision_score: Option<i32>,
+    position: Option<String>,
+    game_duration: Option<i64>,
+    game_creation: Option<i64>,
+    queue_id: Option<i32>,
+    items: Option<Vec<i32>>,
+    summoner_spells: Option<Vec<i32>>,
+    lp_delta: Option<i32>,
+}
+
+impl From<MatchSummaryRow> for MatchSummary {
+    fn from(r: MatchSummaryRow) -> Self {
+        MatchSummary {
+            match_id: r.match_id,
+            champion_id: r.champion_id.unwrap_or(0),
+            champion_name: r.champion_name.unwrap_or_default(),
+            win: r.win.unwrap_or(false),
+            kills: r.kills.unwrap_or(0),
+            deaths: r.deaths.unwrap_or(0),
+            assists: r.assists.unwrap_or(0),
+            cs: r.cs.unwrap_or(0),
+            gold: r.gold.unwrap_or(0),
+            damage: r.damage.unwrap_or(0),
+            vision_score: r.vision_score.unwrap_or(0),
+            position: r.position.unwrap_or_default(),
+            game_duration: r.game_duration.unwrap_or(0),
+            game_creation: r.game_creation.unwrap_or(0),
+            queue_id: r.queue_id.unwrap_or(0),
+            items: r.items.unwrap_or_default(),
+            summoner_spells: r.summoner_spells.unwrap_or_default(),
+            lp_delta: r.lp_delta,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct MatchParticipantRow {
+    puuid: Option<String>,
+    riot_id_name: Option<String>,
+    riot_id_tagline: Option<String>,
+    champion_id: Option<i64>,
+    champion_name: Option<String>,
+    champ_level: Option<i32>,
+    team_id: Option<i32>,
+    win: Option<bool>,
+    kills: Option<i32>,
+    deaths: Option<i32>,
+    assists: Option<i32>,
+    cs: Option<i32>,
+    gold: Option<i32>,
+    damage: Option<i64>,
+    damage_taken: Option<i64>,
+    vision_score: Option<i32>,
+    wards_placed: Option<i32>,
+    wards_killed: Option<i32>,
+    position: Option<String>,
+    items: Option<Vec<i32>>,
+    summoner_spells: Option<Vec<i32>>,
+    double_kills: Option<i32>,
+    triple_kills: Option<i32>,
+    quadra_kills: Option<i32>,
+    penta_kills: Option<i32>,
+}
+
+impl From<MatchParticipantRow> for MatchParticipantDetail {
+    fn from(r: MatchParticipantRow) -> Self {
+        MatchParticipantDetail {
+            puuid: r.puuid.unwrap_or_default(),
+            riot_id_name: r.riot_id_name.unwrap_or_default(),
+            riot_id_tagline: r.riot_id_tagline.unwrap_or_default(),
+            champion_id: r.champion_id.unwrap_or(0),
+            champion_name: r.champion_name.unwrap_or_default(),
+            champ_level: r.champ_level.unwrap_or(1),
+            team_id: r.team_id.unwrap_or(100),
+            win: r.win.unwrap_or(false),
+            kills: r.kills.unwrap_or(0),
+            deaths: r.deaths.unwrap_or(0),
+            assists: r.assists.unwrap_or(0),
+            cs: r.cs.unwrap_or(0),
+            gold: r.gold.unwrap_or(0),
+            damage: r.damage.unwrap_or(0),
+            damage_taken: r.damage_taken.unwrap_or(0),
+            vision_score: r.vision_score.unwrap_or(0),
+            wards_placed: r.wards_placed.unwrap_or(0),
+            wards_killed: r.wards_killed.unwrap_or(0),
+            position: r.position.unwrap_or_default(),
+            items: r.items.unwrap_or_default(),
+            summoner_spells: r.summoner_spells.unwrap_or_default(),
+            double_kills: r.double_kills.unwrap_or(0),
+            triple_kills: r.triple_kills.unwrap_or(0),
+            quadra_kills: r.quadra_kills.unwrap_or(0),
+            penta_kills: r.penta_kills.unwrap_or(0),
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct RankRow {
+    queue_type: String,
+    tier: Option<String>,
+    rank: Option<String>,
+    lp: Option<i32>,
+    wins: Option<i32>,
+    losses: Option<i32>,
+}
+
+impl From<RankRow> for RankInfo {
+    fn from(r: RankRow) -> Self {
+        let wins = r.wins.unwrap_or(0);
+        let losses = r.losses.unwrap_or(0);
+        let total = wins + losses;
+        RankInfo {
+            queue_type: r.queue_type,
+            tier: r.tier.unwrap_or_default(),
+            rank: r.rank.unwrap_or_default(),
+            lp: r.lp.unwrap_or(0),
+            wins,
+            losses,
+            winrate: if total > 0 { ((wins as f64 / total as f64) * 100.0).round() } else { 0.0 },
+        }
+    }
+}

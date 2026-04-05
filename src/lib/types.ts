@@ -152,3 +152,15 @@ export interface ChampionStat {
   avgCs: number;
   position: string;
 }
+
+// --- AI Coach ---
+
+export interface CoachStreamPayload {
+  kind: "start" | "delta" | "end" | "error";
+  text: string | null;
+}
+
+export interface CoachMessage {
+  text: string;
+  timestamp: number;
+}

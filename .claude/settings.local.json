@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(head -20 /mnt/c/Users/home/Documents/LeagueEye/src-tauri/capabilities/*)",
+      "Bash(wc:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx vite:*)",
+      "Bash(cargo check:*)",
+      "Read(//home/home/.cargo/bin/**)",
+      "Read(//mnt/c/Users/home/.cargo/bin/**)",
+      "Bash(/mnt/c/Users/home/.cargo/bin/cargo.exe check:*)",
+      "Bash(cmd.exe /C \"where cargo\")",
+      "Bash(cargo.exe check:*)"
+    ]
+  }
+}

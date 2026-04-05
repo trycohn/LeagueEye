@@ -43,15 +43,22 @@ export default function App() {
 
   const { liveData, phase } = useLiveGame(clientOnline);
 
-  // Автопереключение на live view
+  // Автопереключение на live view + автопоказ оверлея
+  const overlayShownRef = useRef(false);
   useEffect(() => {
     if (phase === "champ_select" || phase === "in_game") {
       if (view !== "live") {
         setPrevView(view);
         setView("live");
       }
+      if (!overlayShownRef.current) {
+        overlayShownRef.current = true;
+        invoke("show_overlay").catch(() => {});
+      }
     } else if (view === "live") {
       setView(prevView);
+      overlayShownRef.current = false;
+      invoke("hide_overlay").catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);

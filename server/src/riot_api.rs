@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{Duration, Instant, sleep};
 
-use crate::models::*;
+use leagueeye_shared::models::*;
 
 const PLATFORM_URL: &str = "https://ru.api.riotgames.com";
 const REGIONAL_URL: &str = "https://europe.api.riotgames.com";
@@ -22,12 +22,9 @@ impl RateLimiter {
         Self { timestamps: VecDeque::new() }
     }
 
-    /// Checks if a slot is available. If yes, reserves it and returns None.
-    /// If not, returns how long to wait before trying again (mutex NOT held during wait).
     fn check_and_reserve(&mut self) -> Option<Duration> {
         let now = Instant::now();
 
-        // Удаляем устаревшие записи
         while self.timestamps.front().map(|t| now.duration_since(*t) > Duration::from_secs(120)).unwrap_or(false) {
             self.timestamps.pop_front();
         }
@@ -58,20 +55,11 @@ impl RateLimiter {
     }
 }
 
+#[derive(Clone)]
 pub struct RiotApiClient {
     client: Client,
     api_key: Arc<String>,
     rate_limiter: Arc<Mutex<RateLimiter>>,
-}
-
-impl Clone for RiotApiClient {
-    fn clone(&self) -> Self {
-        Self {
-            client: self.client.clone(),
-            api_key: self.api_key.clone(),
-            rate_limiter: self.rate_limiter.clone(),
-        }
-    }
 }
 
 impl RiotApiClient {
@@ -84,9 +72,6 @@ impl RiotApiClient {
     }
 
     async fn rate_limit(&self) {
-        // Lock → check → release BEFORE sleeping → repeat.
-        // This ensures the mutex is never held during sleep,
-        // so foreground requests are not blocked by background tasks.
         loop {
             let wait = self.rate_limiter.lock().await.check_and_reserve();
             match wait {
@@ -126,7 +111,7 @@ impl RiotApiClient {
         }
 
         if status == reqwest::StatusCode::FORBIDDEN {
-            return Err("API-ключ истёк или недействителен. Обновите ключ на developer.riotgames.com".to_string());
+            return Err("API-ключ истёк или недействителен".to_string());
         }
 
         if !status.is_success() {
@@ -140,64 +125,33 @@ impl RiotApiClient {
             .map_err(|e| format!("Parse error: {}", e))
     }
 
-    pub async fn get_account_by_riot_id(
-        &self,
-        game_name: &str,
-        tag_line: &str,
-    ) -> Result<RiotAccount, String> {
-        let url = format!(
-            "{}/riot/account/v1/accounts/by-riot-id/{}/{}",
-            REGIONAL_URL, game_name, tag_line
-        );
+    pub async fn get_account_by_riot_id(&self, game_name: &str, tag_line: &str) -> Result<RiotAccount, String> {
+        let url = format!("{}/riot/account/v1/accounts/by-riot-id/{}/{}", REGIONAL_URL, game_name, tag_line);
         self.get(&url).await
     }
 
     pub async fn get_summoner_by_puuid(&self, puuid: &str) -> Result<Summoner, String> {
-        let url = format!(
-            "{}/lol/summoner/v4/summoners/by-puuid/{}",
-            PLATFORM_URL, puuid
-        );
+        let url = format!("{}/lol/summoner/v4/summoners/by-puuid/{}", PLATFORM_URL, puuid);
         self.get(&url).await
     }
 
     pub async fn get_league_entries(&self, summoner_id: &str) -> Result<Vec<LeagueEntry>, String> {
-        let url = format!(
-            "{}/lol/league/v4/entries/by-summoner/{}",
-            PLATFORM_URL, summoner_id
-        );
+        let url = format!("{}/lol/league/v4/entries/by-summoner/{}", PLATFORM_URL, summoner_id);
         self.get(&url).await
     }
 
     pub async fn get_league_entries_by_puuid(&self, puuid: &str) -> Result<Vec<LeagueEntry>, String> {
-        let url = format!(
-            "{}/lol/league/v4/entries/by-puuid/{}",
-            PLATFORM_URL, puuid
-        );
+        let url = format!("{}/lol/league/v4/entries/by-puuid/{}", PLATFORM_URL, puuid);
         self.get(&url).await
     }
 
-    pub async fn get_champion_mastery_top(
-        &self,
-        puuid: &str,
-        count: u32,
-    ) -> Result<Vec<ChampionMastery>, String> {
-        let url = format!(
-            "{}/lol/champion-mastery/v4/champion-masteries/by-puuid/{}/top?count={}",
-            PLATFORM_URL, puuid, count
-        );
+    pub async fn get_champion_mastery_top(&self, puuid: &str, count: u32) -> Result<Vec<ChampionMastery>, String> {
+        let url = format!("{}/lol/champion-mastery/v4/champion-masteries/by-puuid/{}/top?count={}", PLATFORM_URL, puuid, count);
         self.get(&url).await
     }
 
-    pub async fn get_match_ids(
-        &self,
-        puuid: &str,
-        start: u32,
-        count: u32,
-    ) -> Result<Vec<String>, String> {
-        let url = format!(
-            "{}/lol/match/v5/matches/by-puuid/{}/ids?start={}&count={}",
-            REGIONAL_URL, puuid, start, count
-        );
+    pub async fn get_match_ids(&self, puuid: &str, start: u32, count: u32) -> Result<Vec<String>, String> {
+        let url = format!("{}/lol/match/v5/matches/by-puuid/{}/ids?start={}&count={}", REGIONAL_URL, puuid, start, count);
         self.get(&url).await
     }
 
@@ -217,34 +171,19 @@ impl RiotApiClient {
     }
 
     pub async fn get_match(&self, match_id: &str) -> Result<MatchDto, String> {
-        let url = format!(
-            "{}/lol/match/v5/matches/{}",
-            REGIONAL_URL, match_id
-        );
+        let url = format!("{}/lol/match/v5/matches/{}", REGIONAL_URL, match_id);
         self.get(&url).await
     }
 
     pub async fn get_active_game(&self, puuid: &str) -> Result<SpectatorGame, String> {
-        let url = format!(
-            "{}/lol/spectator/v5/active-games/by-summoner/{}",
-            PLATFORM_URL, puuid
-        );
+        let url = format!("{}/lol/spectator/v5/active-games/by-summoner/{}", PLATFORM_URL, puuid);
         self.get(&url).await
     }
 
-    /// Fetches multiple matches in parallel with a concurrency limit.
-    /// batch_size controls how many requests fire simultaneously.
-    pub async fn get_matches_parallel(
-        &self,
-        match_ids: &[String],
-        batch_size: usize,
-    ) -> Vec<MatchDto> {
+    pub async fn get_matches_parallel(&self, match_ids: &[String], batch_size: usize) -> Vec<MatchDto> {
         let mut results = Vec::new();
         for chunk in match_ids.chunks(batch_size) {
-            let futures: Vec<_> = chunk
-                .iter()
-                .map(|id| self.get_match(id))
-                .collect();
+            let futures: Vec<_> = chunk.iter().map(|id| self.get_match(id)).collect();
             let chunk_results = futures::future::join_all(futures).await;
             for r in chunk_results {
                 match r {

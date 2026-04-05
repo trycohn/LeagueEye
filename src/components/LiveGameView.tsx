@@ -1,5 +1,6 @@
 import type { LiveGameData } from "../lib/types";
 import { LivePlayerRow } from "./LivePlayerRow";
+import { CoachPanel } from "./CoachPanel";
 import { useChampionNames } from "../hooks/useChampionNames";
 import { championIconUrl, formatDuration } from "../lib/ddragon";
 import { Swords, Clock, Shield, Ban } from "lucide-react";
@@ -93,6 +94,9 @@ export function LiveGameView({ data, myPuuid }: Props) {
           phase={data.phase}
         />
       </div>
+
+      {/* AI Coach */}
+      <CoachPanel />
     </div>
   );
 }

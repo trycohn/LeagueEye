@@ -224,10 +224,22 @@ pub fn is_lcu_running() -> bool {
     detect_lcu_credentials().is_some()
 }
 
+/// Returns the current gameflow phase from the LCU.
+/// Possible values: "None", "Lobby", "Matchmaking", "ReadyCheck",
+/// "ChampSelect", "GameStart", "InProgress", "WaitingForStats",
+/// "EndOfGame", "Reconnect", etc.
+pub fn get_gameflow_phase(creds: &LcuCredentials) -> Result<String, String> {
+    let body = curl_lcu(creds.port, &creds.token, "/lol-gameflow/v1/gameflow-phase")?;
+    // The response is a JSON string like "InProgress" (with quotes)
+    let phase = body.trim().trim_matches('"').to_string();
+    Ok(phase)
+}
+
 // ── Live Client Data API (game client on :2999) ─────────────────────────────
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct LiveClientPlayer {
     pub riot_id_game_name: Option<String>,
     pub riot_id_tag_line: Option<String>,
@@ -247,4 +259,102 @@ pub fn get_live_client_playerlist() -> Result<Vec<LiveClientPlayer>, String> {
     }
     serde_json::from_str::<Vec<LiveClientPlayer>>(&stdout)
         .map_err(|e| format!("Live Client parse error: {}", e))
+}
+
+// ── All Game Data (rich live stats: items, gold, KDA, CS, events) ────────────
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct LiveAllGameData {
+    pub active_player: Option<LiveActivePlayer>,
+    pub all_players: Option<Vec<LiveFullPlayer>>,
+    pub events: Option<LiveEvents>,
+    pub game_data: Option<LiveGameInfo>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct LiveActivePlayer {
+    pub summoner_name: Option<String>,
+    pub current_gold: Option<f64>,
+    pub level: Option<i32>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct LiveFullPlayer {
+    pub champion_name: Option<String>,
+    pub team: Option<String>,
+    pub position: Option<String>,
+    pub level: Option<i32>,
+    pub scores: Option<LiveScores>,
+    pub items: Option<Vec<LiveItem>>,
+    pub summoner_name: Option<String>,
+    pub riot_id_game_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct LiveScores {
+    pub kills: Option<i32>,
+    pub deaths: Option<i32>,
+    pub assists: Option<i32>,
+    pub creep_score: Option<i32>,
+    pub ward_score: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct LiveItem {
+    pub item_id: Option<i32>,
+    pub display_name: Option<String>,
+    pub count: Option<i32>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveEvents {
+    #[serde(rename = "Events")]
+    pub events: Option<Vec<LiveEventEntry>>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "PascalCase")]
+#[allow(dead_code)]
+pub struct LiveEventEntry {
+    pub event_name: Option<String>,
+    pub event_time: Option<f64>,
+    pub killer_name: Option<String>,
+    pub recipient: Option<String>,
+    pub assisters: Option<Vec<String>>,
+    pub dragon_type: Option<String>,
+    pub turret_killed: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct LiveGameInfo {
+    pub game_time: Option<f64>,
+    pub map_number: Option<i32>,
+    pub game_mode: Option<String>,
+}
+
+pub fn get_live_client_allgamedata() -> Result<LiveAllGameData, String> {
+    let output = Command::new("curl.exe")
+        .args(["-sk", "--max-time", "3", "https://127.0.0.1:2999/liveclientdata/allgamedata"])
+        .output()
+        .map_err(|e| format!("curl.exe error: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.is_empty() || stdout.contains("\"errorCode\"") {
+        return Err("Live Client allgamedata not available".to_string());
+    }
+    serde_json::from_str::<LiveAllGameData>(&stdout)
+        .map_err(|e| format!("Live Client allgamedata parse error: {}", e))
 }

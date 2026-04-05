@@ -12,7 +12,8 @@ dist
 dist-ssr
 *.local
 
-# Tauri
+# Rust
+target/
 src-tauri/target/
 
 # Env

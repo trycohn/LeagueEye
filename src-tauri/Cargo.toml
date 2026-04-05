@@ -26,3 +26,4 @@ tokio = { version = "1", features = ["full"] }
 dotenvy = "0.15"
 futures = "0.3"
 rusqlite = { version = "0.32", features = ["bundled"] }
+leagueeye-shared = { path = "../shared" }
