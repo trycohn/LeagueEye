@@ -46,6 +46,24 @@ pub fn build_context_from_allgamedata(
                 .collect())
             .unwrap_or_default();
 
+        let summoner_spells: Vec<String> = p.summoner_spells.as_ref()
+            .map(|ss| {
+                let mut v = Vec::new();
+                if let Some(s) = ss.summoner_spell_one.as_ref().and_then(|s| s.display_name.clone()) {
+                    v.push(s);
+                }
+                if let Some(s) = ss.summoner_spell_two.as_ref().and_then(|s| s.display_name.clone()) {
+                    v.push(s);
+                }
+                v
+            })
+            .unwrap_or_default();
+
+        let keystone_rune = p.runes.as_ref()
+            .and_then(|r| r.keystone.as_ref())
+            .and_then(|k| k.display_name.clone())
+            .unwrap_or_default();
+
         CoachPlayerInfo {
             champion_name: p.champion_name.clone().unwrap_or_else(|| "?".into()),
             position: p.position.clone().unwrap_or_default(),
@@ -56,6 +74,10 @@ pub fn build_context_from_allgamedata(
             cs: scores.and_then(|s| s.creep_score).unwrap_or(0),
             level: p.level.unwrap_or(1),
             items,
+            summoner_spells,
+            keystone_rune,
+            is_dead: p.is_dead.unwrap_or(false),
+            respawn_timer: p.respawn_timer.unwrap_or(0.0),
         }
     };
 
@@ -92,11 +114,62 @@ pub fn build_context_from_allgamedata(
         })
         .unwrap_or_default();
 
+    // Extract active player data (only available for the local player)
+    let active = alldata.active_player.as_ref();
+    let my_gold = active.and_then(|a| a.current_gold);
+
+    let my_summoner_spells: Vec<String> = me
+        .and_then(|p| p.summoner_spells.as_ref())
+        .map(|ss| {
+            let mut v = Vec::new();
+            if let Some(s) = ss.summoner_spell_one.as_ref().and_then(|s| s.display_name.clone()) {
+                v.push(s);
+            }
+            if let Some(s) = ss.summoner_spell_two.as_ref().and_then(|s| s.display_name.clone()) {
+                v.push(s);
+            }
+            v
+        })
+        .unwrap_or_default();
+
+    let my_runes: Option<String> = active
+        .and_then(|a| a.full_runes.as_ref())
+        .map(|r| {
+            let keystone = r.keystone.as_ref()
+                .and_then(|k| k.display_name.clone())
+                .unwrap_or_else(|| "?".into());
+            let primary = r.primary_rune_tree.as_ref()
+                .and_then(|t| t.display_name.clone())
+                .unwrap_or_else(|| "?".into());
+            let secondary = r.secondary_rune_tree.as_ref()
+                .and_then(|t| t.display_name.clone())
+                .unwrap_or_else(|| "?".into());
+            format!("{} ({} / {})", keystone, primary, secondary)
+        });
+
+    let my_stats: Option<CoachMyStats> = active
+        .and_then(|a| a.champion_stats.as_ref())
+        .map(|s| CoachMyStats {
+            attack_damage: s.attack_damage.unwrap_or(0.0),
+            ability_power: s.ability_power.unwrap_or(0.0),
+            armor: s.armor.unwrap_or(0.0),
+            magic_resist: s.magic_resist.unwrap_or(0.0),
+            current_health: s.current_health.unwrap_or(0.0),
+            max_health: s.max_health.unwrap_or(0.0),
+            attack_speed: s.attack_speed.unwrap_or(0.0),
+            move_speed: s.move_speed.unwrap_or(0.0),
+            ability_haste: s.ability_haste.unwrap_or(0.0),
+        });
+
     Some(CoachingContext {
         phase: "in_game".to_string(),
         game_time_secs: game_time,
         my_champion: my_champ,
         my_position: my_pos,
+        my_gold,
+        my_summoner_spells,
+        my_runes,
+        my_stats,
         my_team,
         enemy_team,
         recent_events,
@@ -129,6 +202,10 @@ pub fn build_context_champ_select(
             cs: 0,
             level: 1,
             items: vec![],
+            summoner_spells: vec![],
+            keystone_rune: String::new(),
+            is_dead: false,
+            respawn_timer: 0.0,
         }
     };
 
@@ -146,6 +223,10 @@ pub fn build_context_champ_select(
         game_time_secs: None,
         my_champion: my_champ,
         my_position: my_pos,
+        my_gold: None,
+        my_summoner_spells: vec![],
+        my_runes: None,
+        my_stats: None,
         my_team: my_team.iter().map(to_info).collect(),
         enemy_team: enemy_team.iter().map(to_info).collect(),
         recent_events: vec![],

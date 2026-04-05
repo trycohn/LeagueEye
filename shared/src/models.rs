@@ -491,6 +491,24 @@ pub struct CoachPlayerInfo {
     pub cs: i32,
     pub level: i32,
     pub items: Vec<String>,
+    pub summoner_spells: Vec<String>,
+    pub keystone_rune: String,
+    pub is_dead: bool,
+    pub respawn_timer: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CoachMyStats {
+    pub attack_damage: f64,
+    pub ability_power: f64,
+    pub armor: f64,
+    pub magic_resist: f64,
+    pub current_health: f64,
+    pub max_health: f64,
+    pub attack_speed: f64,
+    pub move_speed: f64,
+    pub ability_haste: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -500,6 +518,10 @@ pub struct CoachingContext {
     pub game_time_secs: Option<i64>,
     pub my_champion: String,
     pub my_position: String,
+    pub my_gold: Option<f64>,
+    pub my_summoner_spells: Vec<String>,
+    pub my_runes: Option<String>,
+    pub my_stats: Option<CoachMyStats>,
     pub my_team: Vec<CoachPlayerInfo>,
     pub enemy_team: Vec<CoachPlayerInfo>,
     pub recent_events: Vec<String>,
@@ -514,6 +536,9 @@ impl CoachingContext {
         if let Some(t) = self.game_time_secs {
             (t / 30).hash(&mut hasher);
         }
+        if let Some(g) = self.my_gold {
+            ((g / 500.0) as i64).hash(&mut hasher);
+        }
         for p in &self.my_team {
             p.champion_name.hash(&mut hasher);
             p.kills.hash(&mut hasher);
@@ -521,6 +546,7 @@ impl CoachingContext {
             p.assists.hash(&mut hasher);
             p.cs.hash(&mut hasher);
             p.level.hash(&mut hasher);
+            p.is_dead.hash(&mut hasher);
         }
         for p in &self.enemy_team {
             p.champion_name.hash(&mut hasher);
@@ -529,6 +555,7 @@ impl CoachingContext {
             p.assists.hash(&mut hasher);
             p.cs.hash(&mut hasher);
             p.level.hash(&mut hasher);
+            p.is_dead.hash(&mut hasher);
         }
         hasher.finish()
     }

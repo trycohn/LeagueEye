@@ -4,7 +4,7 @@ use axum::{
     Json,
 };
 use futures::stream::Stream;
-use leagueeye_shared::models::{CoachingContext, CoachStreamPayload};
+use leagueeye_shared::models::{CoachPlayerInfo, CoachingContext, CoachStreamPayload};
 use std::sync::Arc;
 
 use crate::AppState;
@@ -15,16 +15,28 @@ fn build_system_prompt(phase: &str) -> String {
     if phase == "champ_select" {
         return r#"Ты — AI-тренер по League of Legends. Анализируй драфт (выбор чемпионов) и давай конкретные рекомендации игроку.
 
+Структура данных:
+- Блок «=== Я (игрок) ===» — это твой подопечный, все советы адресуй ему
+- В списке команды он помечен «[Я]»
+- Раздел «Моя команда» — СОЮЗНИКИ игрока. Раздел «Вражеская команда» — ПРОТИВНИКИ. Не путай их
+
 Правила:
 - Отвечай ТОЛЬКО на русском языке
 - Давай 3-5 коротких конкретных советов в формате маркированного списка
 - Анализируй: синергию команд, контр-пики, win condition обеих команд, слабые/сильные стороны драфта
 - Подскажи что билдить в первую очередь и на какого противника обращать внимание
 - Будь конкретным: называй чемпионов по имени, говори "избегай файтов до 2 предметов" вместо "будь аккуратен"
+- Всегда используй ПОЛНЫЕ имена чемпионов (Мордекайзер, а не Морде; Мисс Фортуна, а не МФ; Чо'Гат, а не Чо)
 - НЕ пиши введение или заключение, только советы"#.to_string();
     }
 
     r#"Ты — AI-тренер по League of Legends. Анализируй текущее состояние игры и давай конкретные рекомендации игроку прямо сейчас.
+
+Структура данных:
+- Блок «=== Я (игрок) ===» — это твой подопечный, все советы адресуй ему. Его статы (KDA, CS, золото, предметы) указаны в этом блоке
+- В списке команды он помечен «[Я]»
+- Раздел «Моя команда» — СОЮЗНИКИ игрока. Раздел «Вражеская команда» — ПРОТИВНИКИ. Не путай их
+- Когда говоришь про статы конкретного игрока, сверяйся с данными из соответствующего раздела
 
 Правила:
 - Отвечай ТОЛЬКО на русском языке
@@ -33,6 +45,7 @@ fn build_system_prompt(phase: &str) -> String {
 - Советуй конкретные действия: "Иди на дракона сейчас", "Фарми до Kraken Slayer", "Сплитпушь топ", "Не дерись — у врага пауэрспайк"
 - Оценивай кто впереди (по золоту, уровням, KDA) и адаптируй советы
 - Указывай приоритетные цели для фокуса в тимфайтах
+- Всегда используй ПОЛНЫЕ имена чемпионов (Мордекайзер, а не Морде; Мисс Фортуна, а не МФ; Чо'Гат, а не Чо)
 - НЕ пиши введение или заключение, только советы"#.to_string()
 }
 
@@ -50,43 +63,54 @@ fn build_user_message(ctx: &CoachingContext) -> String {
         msg.push_str(&format!("Фаза: В игре ({})\n", time_str));
     }
 
+    // Dedicated block for the player being coached
+    msg.push_str("\n=== Я (игрок) ===\n");
     if !ctx.my_champion.is_empty() {
-        msg.push_str(&format!("Мой чемпион: {} ({})\n", ctx.my_champion,
+        msg.push_str(&format!("Чемпион: {} ({})\n", ctx.my_champion,
             if ctx.my_position.is_empty() { "?" } else { &ctx.my_position }));
     }
-
-    msg.push_str("\nМоя команда:\n");
-    for p in &ctx.my_team {
-        msg.push_str(&format!("- {} ({}) ", p.champion_name,
-            if p.position.is_empty() { "?" } else { &p.position }));
-        if !p.rank_display.is_empty() {
-            msg.push_str(&format!("— {} ", p.rank_display));
-        }
+    // Find the player's stats from my_team
+    if let Some(me) = ctx.my_team.iter().find(|p| p.champion_name == ctx.my_champion) {
         if ctx.phase != "champ_select" {
-            msg.push_str(&format!("— {}/{}/{} — {} CS — Lv{}",
-                p.kills, p.deaths, p.assists, p.cs, p.level));
-            if !p.items.is_empty() {
-                msg.push_str(&format!(" — Items: {}", p.items.join(", ")));
+            msg.push_str(&format!("KDA: {}/{}/{} | CS: {} | Уровень: {}",
+                me.kills, me.deaths, me.assists, me.cs, me.level));
+            if let Some(gold) = ctx.my_gold {
+                msg.push_str(&format!(" | Золото: {}", gold as i64));
+            }
+            msg.push('\n');
+            if !me.items.is_empty() {
+                msg.push_str(&format!("Предметы: {}\n", me.items.join(", ")));
             }
         }
-        msg.push('\n');
+        if !me.rank_display.is_empty() {
+            msg.push_str(&format!("Ранг: {}\n", me.rank_display));
+        }
+    }
+    if !ctx.my_summoner_spells.is_empty() {
+        msg.push_str(&format!("Суммонеры: {}\n", ctx.my_summoner_spells.join(", ")));
+    }
+    if let Some(runes) = &ctx.my_runes {
+        msg.push_str(&format!("Руны: {}\n", runes));
+    }
+    if let Some(stats) = &ctx.my_stats {
+        msg.push_str(&format!("Статы: AD:{:.0} AP:{:.0} Armor:{:.0} MR:{:.0} HP:{:.0}/{:.0} AS:{:.2}\n",
+            stats.attack_damage, stats.ability_power, stats.armor,
+            stats.magic_resist, stats.current_health, stats.max_health,
+            stats.attack_speed));
     }
 
-    msg.push_str("\nВражеская команда:\n");
+    // Team listing with [Я] marker
+    msg.push_str("\nМоя команда (СОЮЗНИКИ):\n");
+    for p in &ctx.my_team {
+        let is_me = p.champion_name == ctx.my_champion
+            && (ctx.my_position.is_empty() || p.position == ctx.my_position);
+        let marker = if is_me { "[Я] " } else { "" };
+        write_player_line(&mut msg, p, marker, ctx.phase == "champ_select");
+    }
+
+    msg.push_str("\nВражеская команда (ПРОТИВНИКИ):\n");
     for p in &ctx.enemy_team {
-        msg.push_str(&format!("- {} ({}) ", p.champion_name,
-            if p.position.is_empty() { "?" } else { &p.position }));
-        if !p.rank_display.is_empty() {
-            msg.push_str(&format!("— {} ", p.rank_display));
-        }
-        if ctx.phase != "champ_select" {
-            msg.push_str(&format!("— {}/{}/{} — {} CS — Lv{}",
-                p.kills, p.deaths, p.assists, p.cs, p.level));
-            if !p.items.is_empty() {
-                msg.push_str(&format!(" — Items: {}", p.items.join(", ")));
-            }
-        }
-        msg.push('\n');
+        write_player_line(&mut msg, p, "", ctx.phase == "champ_select");
     }
 
     if !ctx.recent_events.is_empty() {
@@ -98,6 +122,36 @@ fn build_user_message(ctx: &CoachingContext) -> String {
 
     msg.push_str("\nДай мне конкретные советы для текущей ситуации.");
     msg
+}
+
+fn write_player_line(msg: &mut String, p: &CoachPlayerInfo, marker: &str, is_champ_select: bool) {
+    msg.push_str(&format!("- {}{} ({}) ", marker, p.champion_name,
+        if p.position.is_empty() { "?" } else { &p.position }));
+    if !p.summoner_spells.is_empty() {
+        msg.push_str(&format!("— {} ", p.summoner_spells.join("/")));
+    }
+    if !p.keystone_rune.is_empty() {
+        msg.push_str(&format!("— {} ", p.keystone_rune));
+    }
+    if !p.rank_display.is_empty() {
+        msg.push_str(&format!("— {} ", p.rank_display));
+    }
+    if !is_champ_select {
+        msg.push_str(&format!("— {}/{}/{} — {} CS — Lv{}",
+            p.kills, p.deaths, p.assists, p.cs, p.level));
+        if !p.items.is_empty() {
+            msg.push_str(&format!(" — Items: {}", p.items.join(", ")));
+        }
+        if p.is_dead {
+            let secs = p.respawn_timer as i64;
+            if secs > 0 {
+                msg.push_str(&format!(" — [МЁРТВ {}с]", secs));
+            } else {
+                msg.push_str(" — [МЁРТВ]");
+            }
+        }
+    }
+    msg.push('\n');
 }
 
 // ─── SSE streaming endpoint ─────────────────────────────────────────────────

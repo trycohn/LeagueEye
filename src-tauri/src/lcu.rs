@@ -280,6 +280,40 @@ pub struct LiveActivePlayer {
     pub summoner_name: Option<String>,
     pub current_gold: Option<f64>,
     pub level: Option<i32>,
+    pub champion_stats: Option<LiveChampionStats>,
+    pub full_runes: Option<LiveFullRunes>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct LiveChampionStats {
+    pub attack_damage: Option<f64>,
+    pub ability_power: Option<f64>,
+    pub armor: Option<f64>,
+    pub magic_resist: Option<f64>,
+    pub current_health: Option<f64>,
+    pub max_health: Option<f64>,
+    pub attack_speed: Option<f64>,
+    pub move_speed: Option<f64>,
+    pub ability_haste: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct LiveFullRunes {
+    pub keystone: Option<LiveRuneInfo>,
+    pub primary_rune_tree: Option<LiveRuneInfo>,
+    pub secondary_rune_tree: Option<LiveRuneInfo>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct LiveRuneInfo {
+    pub display_name: Option<String>,
+    pub id: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -294,6 +328,34 @@ pub struct LiveFullPlayer {
     pub items: Option<Vec<LiveItem>>,
     pub summoner_name: Option<String>,
     pub riot_id_game_name: Option<String>,
+    pub summoner_spells: Option<LiveSummonerSpells>,
+    pub is_dead: Option<bool>,
+    pub respawn_timer: Option<f64>,
+    pub runes: Option<LivePlayerRunes>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct LiveSummonerSpells {
+    pub summoner_spell_one: Option<LiveSpellInfo>,
+    pub summoner_spell_two: Option<LiveSpellInfo>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct LiveSpellInfo {
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct LivePlayerRunes {
+    pub keystone: Option<LiveRuneInfo>,
+    pub primary_rune_tree: Option<LiveRuneInfo>,
+    pub secondary_rune_tree: Option<LiveRuneInfo>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

@@ -10,7 +10,13 @@
       "Read(//mnt/c/Users/home/.cargo/bin/**)",
       "Bash(/mnt/c/Users/home/.cargo/bin/cargo.exe check:*)",
       "Bash(cmd.exe /C \"where cargo\")",
-      "Bash(cargo.exe check:*)"
+      "Bash(cargo.exe check:*)",
+      "WebFetch(domain:developer.riotgames.com)",
+      "Bash(cargo build:*)",
+      "Bash(export PATH=\"$HOME/.cargo/bin:$PATH\")",
+      "Bash(cargo metadata:*)",
+      "Bash(python3 -c \"import sys,json; pkgs=json.load\\(sys.stdin\\)['packages']; [print\\(p['name']\\) for p in pkgs]\")",
+      "Bash(rustfmt --check src-tauri/src/ai_coach.rs)"
     ]
   }
 }
