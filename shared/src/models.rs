@@ -527,39 +527,6 @@ pub struct CoachingContext {
     pub recent_events: Vec<String>,
 }
 
-impl CoachingContext {
-    pub fn compute_hash(&self) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut hasher = DefaultHasher::new();
-        self.phase.hash(&mut hasher);
-        if let Some(t) = self.game_time_secs {
-            (t / 30).hash(&mut hasher);
-        }
-        if let Some(g) = self.my_gold {
-            ((g / 500.0) as i64).hash(&mut hasher);
-        }
-        for p in &self.my_team {
-            p.champion_name.hash(&mut hasher);
-            p.kills.hash(&mut hasher);
-            p.deaths.hash(&mut hasher);
-            p.assists.hash(&mut hasher);
-            p.cs.hash(&mut hasher);
-            p.level.hash(&mut hasher);
-            p.is_dead.hash(&mut hasher);
-        }
-        for p in &self.enemy_team {
-            p.champion_name.hash(&mut hasher);
-            p.kills.hash(&mut hasher);
-            p.deaths.hash(&mut hasher);
-            p.assists.hash(&mut hasher);
-            p.cs.hash(&mut hasher);
-            p.level.hash(&mut hasher);
-            p.is_dead.hash(&mut hasher);
-        }
-        hasher.finish()
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]

@@ -8,7 +8,6 @@ import { Sparkles, Loader2, X, GripHorizontal } from "lucide-react";
 
 export function OverlayApp() {
   const { messages, currentStream, isStreaming, error, requestAdvice } = useAiCoach();
-  const mountedRef = useRef(false);
   const contentRef = useRef<HTMLDivElement>(null);
 
   // Auto-resize window to fit content
@@ -30,15 +29,7 @@ export function OverlayApp() {
     updateSize();
   }, [currentStream, messages, isStreaming, error, updateSize]);
 
-  // Auto-request on first mount
-  useEffect(() => {
-    if (!mountedRef.current) {
-      mountedRef.current = true;
-      requestAdvice();
-    }
-  }, [requestAdvice]);
-
-  // Listen for hotkey re-trigger
+  // Listen for hotkey trigger
   useEffect(() => {
     const unlisten = listen("hotkey-coach-trigger", () => {
       requestAdvice();

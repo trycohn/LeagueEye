@@ -45,8 +45,14 @@ export default function App() {
 
   // Автопереключение на live view + автопоказ оверлея
   const overlayShownRef = useRef(false);
+  const leaveLiveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (phase === "champ_select" || phase === "in_game") {
+      // Cancel any pending "leave live" timer — we're back in game
+      if (leaveLiveTimerRef.current) {
+        clearTimeout(leaveLiveTimerRef.current);
+        leaveLiveTimerRef.current = null;
+      }
       if (view !== "live") {
         setPrevView(view);
         setView("live");
@@ -54,12 +60,24 @@ export default function App() {
       if (!overlayShownRef.current) {
         overlayShownRef.current = true;
         invoke("show_overlay").catch(() => {});
+        invoke("show_gold_overlay").catch(() => {});
       }
-    } else if (view === "live") {
-      setView(prevView);
-      overlayShownRef.current = false;
-      invoke("hide_overlay").catch(() => {});
+    } else if (view === "live" && !leaveLiveTimerRef.current) {
+      // Debounce leaving live view to avoid flickering during phase transitions
+      leaveLiveTimerRef.current = setTimeout(() => {
+        leaveLiveTimerRef.current = null;
+        setView(prevView);
+        overlayShownRef.current = false;
+        invoke("hide_overlay").catch(() => {});
+        invoke("hide_gold_overlay").catch(() => {});
+      }, 1500);
     }
+    return () => {
+      if (leaveLiveTimerRef.current) {
+        clearTimeout(leaveLiveTimerRef.current);
+        leaveLiveTimerRef.current = null;
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 

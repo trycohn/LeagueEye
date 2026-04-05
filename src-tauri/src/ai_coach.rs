@@ -6,14 +6,12 @@ use std::collections::HashMap;
 
 pub struct CoachState {
     pub is_requesting: bool,
-    pub last_state_hash: u64,
 }
 
 impl CoachState {
     pub fn new() -> Self {
         Self {
             is_requesting: false,
-            last_state_hash: 0,
         }
     }
 }

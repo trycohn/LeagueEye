@@ -28,6 +28,19 @@ impl ChampionNamesCache {
     }
 }
 
+// ─── ItemCostCache (золото предметов из DDragon) ───────────────────────────
+
+pub struct ItemCostCache {
+    pub item_costs: HashMap<i32, i32>,
+    pub loaded: bool,
+}
+
+impl ItemCostCache {
+    pub fn new() -> Self {
+        Self { item_costs: HashMap::new(), loaded: false }
+    }
+}
+
 // ─── LastLiveState (стабилизация фазы при переходах) ────────────────────────
 
 pub struct LastLiveState {
@@ -45,17 +58,10 @@ impl LastLiveState {
 #[tauri::command]
 pub async fn search_player(
     api: State<'_, ServerApiClient>,
-    db: State<'_, SharedDb>,
     game_name: String,
     tag_line: String,
 ) -> Result<PlayerProfile, String> {
     let profile = api.search_player(&game_name, &tag_line).await?;
-
-    // Save to local cache for instant startup
-    if let Ok(db) = db.lock() {
-        let _ = db.save_account(&profile);
-    }
-
     Ok(profile)
 }
 
@@ -184,6 +190,7 @@ pub async fn get_live_game(
     let creds = match lcu::detect_lcu_credentials() {
         Some(c) => c,
         None => {
+            crate::keyboard_hook::set_game_active(false);
             if let Ok(mut ls) = last_live.lock() { ls.data = None; }
             return Ok(none_result);
         }
@@ -195,8 +202,11 @@ pub async fn get_live_game(
     let is_champ_select = gameflow_phase == "ChampSelect";
     let is_in_game = matches!(
         gameflow_phase.as_str(),
-        "InProgress" | "GameStart" | "Reconnect" | "WaitingForStats"
+        "InProgress" | "GameStart" | "Reconnect"
     );
+
+    // Update keyboard hook: Shift+E only works during champ select or in-game
+    crate::keyboard_hook::set_game_active(is_champ_select || is_in_game);
 
     // ── 1. Champ Select ─────────────────────────────────────────────────────
     if is_champ_select {
@@ -571,17 +581,6 @@ pub async fn request_coaching(
             })?
     };
 
-    // Check if state changed since last request
-    let state_hash = ctx.compute_hash();
-    {
-        let mut state = coach_state.lock().map_err(|e| e.to_string())?;
-        if state.last_state_hash == state_hash && state_hash != 0 {
-            state.is_requesting = false;
-            return Err("Состояние игры не изменилось".to_string());
-        }
-        state.last_state_hash = state_hash;
-    }
-
     // Spawn streaming task — sends context to server, server calls Anthropic
     let api_client = api.inner().clone();
     let coach_state_arc = Arc::clone(&*coach_state);
@@ -666,4 +665,156 @@ async fn get_or_fetch_champion_names(
     }
 
     (id_map, name_map)
+}
+
+// ─── item cost cache ────────────────────────────────────────────────────────
+
+async fn get_or_fetch_item_costs(
+    cache: &Arc<Mutex<ItemCostCache>>,
+) -> HashMap<i32, i32> {
+    {
+        let c = cache.lock().unwrap();
+        if c.loaded { return c.item_costs.clone(); }
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_default();
+
+    let url = "https://ddragon.leagueoflegends.com/cdn/16.7.1/data/en_US/item.json";
+    let mut costs: HashMap<i32, i32> = HashMap::new();
+
+    if let Ok(resp) = client.get(url).send().await {
+        if let Ok(json) = resp.json::<serde_json::Value>().await {
+            if let Some(data) = json.get("data").and_then(|d| d.as_object()) {
+                for (id_str, info) in data {
+                    if let Ok(id) = id_str.parse::<i32>() {
+                        if let Some(total) = info.pointer("/gold/total").and_then(|v| v.as_i64()) {
+                            costs.insert(id, total as i32);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    log::info!("[item_cache] Loaded {} item costs", costs.len());
+
+    if !costs.is_empty() {
+        let mut c = cache.lock().unwrap();
+        c.item_costs = costs.clone();
+        c.loaded = true;
+    }
+
+    costs
+}
+
+// ─── get_gold_comparison ────────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoldComparisonData {
+    pub lanes: Vec<LaneGoldComparison>,
+    pub game_time: Option<i64>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaneGoldComparison {
+    pub role: String,
+    pub ally_champion_name: String,   // internal name for DDragon icon
+    pub ally_gold: i32,
+    pub enemy_champion_name: String,
+    pub enemy_gold: i32,
+    pub gold_diff: i32,               // positive = ally ahead
+}
+
+#[tauri::command]
+pub async fn get_gold_comparison(
+    item_cache: State<'_, Arc<Mutex<ItemCostCache>>>,
+    champ_cache: State<'_, Arc<Mutex<ChampionNamesCache>>>,
+) -> Result<GoldComparisonData, String> {
+    let alldata = lcu::get_live_client_allgamedata()
+        .map_err(|_| "Live Client API недоступен".to_string())?;
+
+    let players = alldata.all_players.as_ref()
+        .ok_or("Нет данных игроков")?;
+
+    let game_time = alldata.game_data.as_ref()
+        .and_then(|g| g.game_time.map(|t| t as i64));
+
+    // Determine my team
+    let creds = lcu::detect_lcu_credentials()
+        .ok_or("League Client не запущен")?;
+    let identity = lcu::get_lcu_identity(&creds).await
+        .map_err(|e| format!("Не удалось определить игрока: {}", e))?;
+
+    let my_team_str = players.iter()
+        .find(|p| {
+            p.riot_id_game_name.as_deref() == Some(&identity.game_name)
+                || p.summoner_name.as_deref() == Some(&identity.game_name)
+        })
+        .and_then(|p| p.team.clone())
+        .unwrap_or_else(|| "ORDER".to_string());
+
+    let item_costs = get_or_fetch_item_costs(&item_cache).await;
+    let (id_to_name, name_to_id) = get_or_fetch_champion_names(&champ_cache).await;
+
+    let calc_gold = |p: &lcu::LiveFullPlayer| -> i32 {
+        p.items.as_ref().map(|items| {
+            items.iter().map(|item| {
+                let id = item.item_id.unwrap_or(0);
+                let count = item.count.unwrap_or(1).max(1);
+                item_costs.get(&id).copied().unwrap_or(0) * count
+            }).sum()
+        }).unwrap_or(0)
+    };
+
+    // Resolve Russian champion name → internal name for icon URLs
+    let resolve_champ_name = |ru_name: &str| -> String {
+        if let Some(&champ_id) = name_to_id.get(ru_name) {
+            id_to_name.get(&champ_id).cloned().unwrap_or_else(|| ru_name.to_string())
+        } else {
+            ru_name.to_string()
+        }
+    };
+
+    // Group by role
+    let role_order = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"];
+
+    let mut allies: HashMap<String, (&lcu::LiveFullPlayer, i32)> = HashMap::new();
+    let mut enemies: HashMap<String, (&lcu::LiveFullPlayer, i32)> = HashMap::new();
+
+    for p in players {
+        let role = p.position.clone().unwrap_or_default().to_uppercase();
+        if role.is_empty() { continue; }
+        let gold = calc_gold(p);
+        if p.team.as_deref() == Some(&my_team_str) {
+            allies.insert(role, (p, gold));
+        } else {
+            enemies.insert(role, (p, gold));
+        }
+    }
+
+    let mut lanes = Vec::new();
+    for role in &role_order {
+        let role_str = role.to_string();
+        if let (Some((ally, ally_gold)), Some((enemy, enemy_gold))) =
+            (allies.get(&role_str), enemies.get(&role_str))
+        {
+            let ally_champ = ally.champion_name.clone().unwrap_or_default();
+            let enemy_champ = enemy.champion_name.clone().unwrap_or_default();
+            lanes.push(LaneGoldComparison {
+                role: role_str,
+                ally_champion_name: resolve_champ_name(&ally_champ),
+                ally_gold: *ally_gold,
+                enemy_champion_name: resolve_champ_name(&enemy_champ),
+                enemy_gold: *enemy_gold,
+                gold_diff: ally_gold - enemy_gold,
+            });
+        }
+    }
+
+    Ok(GoldComparisonData { lanes, game_time })
 }

@@ -16,7 +16,11 @@
       "Bash(export PATH=\"$HOME/.cargo/bin:$PATH\")",
       "Bash(cargo metadata:*)",
       "Bash(python3 -c \"import sys,json; pkgs=json.load\\(sys.stdin\\)['packages']; [print\\(p['name']\\) for p in pkgs]\")",
-      "Bash(rustfmt --check src-tauri/src/ai_coach.rs)"
+      "Bash(rustfmt --check src-tauri/src/ai_coach.rs)",
+      "Bash(ls -la /mnt/c/Users/home/Documents/LeagueEye/.cursor* /mnt/c/Users/home/Documents/LeagueEye/.cursorrules /mnt/c/Users/home/Documents/LeagueEye/.github/copilot*)",
+      "Bash(~/.cargo/bin/cargo check:*)",
+      "Bash(ls:*)",
+      "Bash(/home/home/.cargo/bin/cargo check:*)"
     ]
   }
 }

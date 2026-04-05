@@ -68,7 +68,7 @@ export function useAiCoach() {
     // Register this component as the state change listener
     onStateChange = () => {
       if (mountedRef.current) {
-        forceUpdate((n) => n + 1);
+        forceUpdate((n: number) => n + 1);
       }
     };
 
@@ -81,19 +81,19 @@ export function useAiCoach() {
   const requestAdvice = useCallback(async () => {
     if (persistedIsStreaming) return;
     persistedError = null;
-    forceUpdate((n) => n + 1);
+    forceUpdate((n: number) => n + 1);
     try {
       await invoke("request_coaching");
     } catch (e) {
       persistedError = typeof e === "string" ? e : String(e);
-      forceUpdate((n) => n + 1);
+      forceUpdate((n: number) => n + 1);
     }
   }, []);
 
   const clearMessages = useCallback(() => {
     persistedMessages = [];
     persistedError = null;
-    forceUpdate((n) => n + 1);
+    forceUpdate((n: number) => n + 1);
   }, []);
 
   return {

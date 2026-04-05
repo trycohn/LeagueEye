@@ -164,3 +164,19 @@ export interface CoachMessage {
   text: string;
   timestamp: number;
 }
+
+// --- Gold Comparison ---
+
+export interface GoldComparisonData {
+  lanes: LaneGoldComparison[];
+  gameTime: number | null;
+}
+
+export interface LaneGoldComparison {
+  role: string;
+  allyChampionName: string;
+  allyGold: number;
+  enemyChampionName: string;
+  enemyGold: number;
+  goldDiff: number;
+}
