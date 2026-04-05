@@ -20,8 +20,12 @@ impl Clone for ServerApiClient {
 
 impl ServerApiClient {
     pub fn new(base_url: String) -> Self {
+        let client = Client::builder()
+            .danger_accept_invalid_certs(base_url.starts_with("https://"))
+            .build()
+            .unwrap_or_default();
         Self {
-            client: Client::new(),
+            client,
             base_url: base_url.trim_end_matches('/').to_string(),
         }
     }
