@@ -10,7 +10,11 @@ use api_client::ServerApiClient;
 use commands::{ChampionNamesCache, ItemCostCache, LastLiveState};
 use db::Db;
 use std::sync::{Arc, Mutex};
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{
+    Manager, WebviewUrl, WebviewWindowBuilder,
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconEvent},
+};
 
 pub type SharedDb = Arc<Mutex<Db>>;
 
@@ -252,6 +256,34 @@ pub fn run() {
 
             keyboard_hook::install(app.handle().clone());
 
+            // ── System tray ──
+            let quit_item = MenuItem::with_id(app, "quit", "Закрыть", true, None::<&str>)?;
+            let tray_menu = Menu::with_items(app, &[&quit_item])?;
+
+            if let Some(tray) = app.tray_by_id("main") {
+                tray.set_menu(Some(tray_menu))?;
+                tray.on_menu_event(|app, event| {
+                    if event.id() == "quit" {
+                        app.exit(0);
+                    }
+                });
+                tray.on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.unminimize();
+                            let _ = win.set_focus();
+                        }
+                    }
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -275,6 +307,14 @@ pub fn run() {
             commands::request_coaching,
             commands::get_gold_comparison,
         ])
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -25,6 +25,11 @@
     "withGlobalTauri": true,
     "security": {
       "csp": null
+    },
+    "trayIcon": {
+      "iconPath": "icons/icon.png",
+      "tooltip": "LeagueEye",
+      "showMenuOnLeftClick": false
     }
   },
   "bundle": {
