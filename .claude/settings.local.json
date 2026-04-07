@@ -20,7 +20,11 @@
       "Bash(ls -la /mnt/c/Users/home/Documents/LeagueEye/.cursor* /mnt/c/Users/home/Documents/LeagueEye/.cursorrules /mnt/c/Users/home/Documents/LeagueEye/.github/copilot*)",
       "Bash(~/.cargo/bin/cargo check:*)",
       "Bash(ls:*)",
-      "Bash(/home/home/.cargo/bin/cargo check:*)"
+      "Bash(/home/home/.cargo/bin/cargo check:*)",
+      "WebSearch",
+      "WebFetch(domain:static.developer.riotgames.com)",
+      "Read(//home/tryconn/.cargo/**)",
+      "Read(//usr/local/cargo/**)"
     ]
   }
 }

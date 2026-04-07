@@ -1,14 +1,6 @@
 import type { LaneGoldComparison } from "../lib/types";
 import { championIconUrl } from "../lib/ddragon";
 
-const ROLE_LABELS: Record<string, string> = {
-  TOP: "TOP",
-  JUNGLE: "JG",
-  MIDDLE: "MID",
-  BOTTOM: "ADC",
-  UTILITY: "SUP",
-};
-
 function formatGold(gold: number): string {
   const abs = Math.abs(gold);
   if (abs >= 1000) return `${(gold / 1000).toFixed(1)}k`;
@@ -24,16 +16,11 @@ export function GoldLaneRow({ lane }: { lane: LaneGoldComparison }) {
 
   return (
     <div className="flex items-center gap-2">
-      {/* Role label */}
-      <span className="text-[10px] text-text-muted w-6 text-center shrink-0">
-        {ROLE_LABELS[lane.role] ?? lane.role}
-      </span>
-
       {/* Ally icon */}
       <img
         src={championIconUrl(lane.allyChampionName)}
         alt={lane.allyChampionName}
-        className="w-7 h-7 rounded shrink-0"
+        className="w-8 h-8 rounded shrink-0"
         onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
       />
 
@@ -42,7 +29,7 @@ export function GoldLaneRow({ lane }: { lane: LaneGoldComparison }) {
         <p className={`text-[10px] font-bold text-center ${diffColor} leading-tight`}>
           {diffText}
         </p>
-        <div className="h-2 rounded-full overflow-hidden flex" style={{ background: "rgba(239,68,68,0.3)" }}>
+        <div className="h-2.5 rounded-full overflow-hidden flex" style={{ background: "rgba(239,68,68,0.3)" }}>
           <div
             className="h-full rounded-l-full transition-all duration-700"
             style={{
@@ -57,7 +44,7 @@ export function GoldLaneRow({ lane }: { lane: LaneGoldComparison }) {
       <img
         src={championIconUrl(lane.enemyChampionName)}
         alt={lane.enemyChampionName}
-        className="w-7 h-7 rounded shrink-0"
+        className="w-8 h-8 rounded shrink-0"
         onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
       />
     </div>

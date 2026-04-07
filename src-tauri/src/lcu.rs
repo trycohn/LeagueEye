@@ -1,6 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Debug, Clone)]
 pub struct LcuCredentials {
@@ -144,6 +149,7 @@ fn find_league_dir_from_process() -> Option<PathBuf> {
     "#;
     let output = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", ps_cmd])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .ok()?;
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -171,6 +177,7 @@ fn curl_lcu(port: u16, token: &str, path: &str) -> Result<String, String> {
     let url = format!("https://127.0.0.1:{}{}", port, path);
     let output = Command::new("curl.exe")
         .args(["-sk", "--max-time", "5", "-u", &format!("riot:{}", token), &url])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("curl.exe error: {}", e))?;
 
@@ -250,6 +257,7 @@ pub struct LiveClientPlayer {
 pub fn get_live_client_playerlist() -> Result<Vec<LiveClientPlayer>, String> {
     let output = Command::new("curl.exe")
         .args(["-sk", "--max-time", "2", "https://127.0.0.1:2999/liveclientdata/playerlist"])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("curl.exe error: {}", e))?;
 
@@ -373,9 +381,11 @@ pub struct LiveScores {
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 pub struct LiveItem {
+    #[serde(alias = "itemID")]
     pub item_id: Option<i32>,
     pub display_name: Option<String>,
     pub count: Option<i32>,
+    pub price: Option<i32>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -410,6 +420,7 @@ pub struct LiveGameInfo {
 pub fn get_live_client_allgamedata() -> Result<LiveAllGameData, String> {
     let output = Command::new("curl.exe")
         .args(["-sk", "--max-time", "3", "https://127.0.0.1:2999/liveclientdata/allgamedata"])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("curl.exe error: {}", e))?;
 

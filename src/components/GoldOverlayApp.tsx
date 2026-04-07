@@ -36,7 +36,7 @@ export function GoldOverlayApp() {
   const updateSize = useCallback(() => {
     if (!contentRef.current) return;
     const h = Math.ceil(contentRef.current.getBoundingClientRect().height);
-    invoke("resize_gold_overlay", { width: 340, height: h }).catch(() => {});
+    invoke("resize_gold_overlay", { width: 280, height: h }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -83,7 +83,7 @@ export function GoldOverlayApp() {
         </div>
 
         {/* Content */}
-        <div className="px-3 py-2">
+        <div className="px-3 py-3">
           {loading && !data && (
             <div className="flex items-center gap-2 py-3 justify-center">
               <Loader2 size={14} className="animate-spin text-gold" />
@@ -96,7 +96,7 @@ export function GoldOverlayApp() {
           )}
 
           {data && data.lanes.length > 0 && (
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-2.5">
               {data.lanes.map((lane) => (
                 <GoldLaneRow key={lane.role} lane={lane} />
               ))}

@@ -45,7 +45,7 @@ fn create_gold_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
 
     let _win = WebviewWindowBuilder::new(app, "gold-overlay", WebviewUrl::App("gold-overlay.html".into()))
         .title("LeagueEye Gold")
-        .inner_size(340.0, 280.0)
+        .inner_size(280.0, 300.0)
         .always_on_top(true)
         .transparent(true)
         .decorations(false)
@@ -219,10 +219,9 @@ mod keyboard_hook {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    dotenvy::dotenv().ok();
-
-    let server_url = std::env::var("LEAGUEEYE_SERVER_URL")
-        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let server_url = option_env!("LEAGUEEYE_SERVER_URL")
+        .unwrap_or("http://localhost:3000")
+        .to_string();
 
     let client = ServerApiClient::new(server_url);
 
