@@ -1,5 +1,4 @@
-import { SearchBar } from "../SearchBar";
-import { Eye, Search, History, Star, TrendingUp, Gamepad2 } from "lucide-react";
+import { PlayCircle, Eye, Clock } from "lucide-react";
 import type { DetectedAccount } from "../../lib/types";
 
 interface Props {
@@ -9,109 +8,95 @@ interface Props {
   loading: boolean;
 }
 
-export function HomeVariant2({ detectedAccount, onSearch, onBadgeClick, loading }: Props) {
-  return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 min-h-[70vh] py-8">
-      {/* Left Column: Search & Quick Actions */}
-      <div className="lg:col-span-4 space-y-8">
-        <div>
-          <h2 className="text-2xl font-bold text-text-primary mb-2 flex items-center gap-2">
-            <Search className="text-accent" /> Поиск игрока
-          </h2>
-          <p className="text-text-muted mb-6">Найдите статистику любого призывателя</p>
-          <SearchBar onSearch={onSearch} loading={loading} />
-        </div>
+const LIVE_GAMES = [
+  { p1: "Faker", p2: "Chovy", champ1: "Ahri", champ2: "Azir", time: "14:23", elo: "Challenger 1200 LP" },
+  { p1: "Oner", p2: "Canyon", champ1: "LeeSin", champ2: "Nidalee", time: "08:45", elo: "Challenger 1450 LP" },
+  { p1: "Zeus", p2: "Doran", champ1: "Aatrox", champ2: "Gnar", time: "22:10", elo: "Challenger 1100 LP" },
+  { p1: "Gumayusi", p2: "Viper", champ1: "Jinx", champ2: "Zeri", time: "05:30", elo: "Grandmaster 800 LP" },
+  { p1: "Keria", p2: "Lehends", champ1: "Thresh", champ2: "Nautilus", time: "31:05", elo: "Challenger 1300 LP" },
+  { p1: "ShowMaker", p2: "Bdd", champ1: "Syndra", champ2: "Orianna", time: "18:50", elo: "Challenger 1600 LP" },
+];
 
-        <div className="bg-bg-card rounded-2xl p-6 border border-border">
-          <h3 className="font-semibold text-text-primary mb-4 flex items-center gap-2">
-            <History size={18} className="text-text-secondary" /> Недавние поиски
-          </h3>
-          <div className="space-y-3">
-            {/* Mock recent searches */}
-            {["Faker#KR1", "Chovy#KR1", "ShowMaker#KR1"].map((player) => (
-              <button
-                key={player}
-                onClick={() => onSearch(player.split("#")[0], player.split("#")[1])}
-                className="w-full text-left px-4 py-3 rounded-xl hover:bg-bg-hover transition-colors flex justify-between items-center group"
-              >
-                <span className="text-text-primary font-medium">{player.split("#")[0]}</span>
-                <span className="text-text-muted text-sm group-hover:text-accent transition-colors">#{player.split("#")[1]}</span>
-              </button>
-            ))}
+export function HomeVariant2({ detectedAccount, onBadgeClick }: Props) {
+  return (
+    <div className="max-w-7xl mx-auto py-6">
+      {/* Account Banner (if connected) */}
+      {detectedAccount && (
+        <div className="mb-6 bg-[#1a1d28] border border-[#2a2d3a] rounded-sm p-4 flex items-center justify-between shadow-sm">
+          <div className="flex items-center gap-4">
+            <img
+              src={`https://ddragon.leagueoflegends.com/cdn/14.8.1/img/profileicon/${detectedAccount.profileIconId}.png`}
+              alt="Profile"
+              className="w-12 h-12 rounded-sm border border-[#2a2d3a]"
+            />
+            <div>
+              <div className="text-xs text-[#94a3b8] font-semibold uppercase tracking-wider flex items-center gap-1 mb-0.5">
+                <div className="w-1.5 h-1.5 rounded-full bg-[#22c55e]"></div>
+                В сети
+              </div>
+              <div className="text-base font-bold text-[#e2e8f0]">
+                {detectedAccount.gameName} <span className="text-[#64748b] font-normal">#{detectedAccount.tagLine}</span>
+              </div>
+            </div>
           </div>
+          <button
+            onClick={onBadgeClick}
+            className="px-4 py-2 bg-[#1e2130] border border-[#2a2d3a] hover:bg-[#252838] text-[#e2e8f0] text-sm font-bold rounded-sm transition-colors"
+          >
+            Перейти в профиль
+          </button>
+        </div>
+      )}
+
+      <div className="mb-4 flex items-center justify-between border-b border-[#2a2d3a] pb-3">
+        <h2 className="text-lg font-bold text-[#e2e8f0] uppercase tracking-wider flex items-center gap-2">
+          <PlayCircle size={20} className="text-[#ef4444]" />
+          Live Spectate (High Elo)
+        </h2>
+        <div className="text-xs font-bold text-[#94a3b8] uppercase tracking-wider">
+          Сейчас играют
         </div>
       </div>
 
-      {/* Right Column: Dashboard or Welcome */}
-      <div className="lg:col-span-8">
-        {detectedAccount ? (
-          <div className="space-y-6">
-            <div className="bg-gradient-to-br from-accent/20 to-bg-card border border-accent/20 rounded-3xl p-8 relative overflow-hidden">
-              <div className="absolute top-0 right-0 w-64 h-64 bg-accent/10 rounded-full blur-3xl" />
-              <div className="relative z-10 flex flex-col md:flex-row items-center gap-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {LIVE_GAMES.map((game, i) => (
+          <div key={i} className="bg-[#1a1d28] border border-[#2a2d3a] rounded-sm hover:border-[#3b82f6] transition-colors cursor-pointer group">
+            <div className="px-4 py-2 border-b border-[#2a2d3a] flex items-center justify-between bg-[#1e2130]">
+              <div className="text-xs font-bold text-[#eab308] uppercase tracking-wider flex items-center gap-1.5">
+                <Eye size={12} /> {game.elo}
+              </div>
+              <div className="text-xs font-bold text-[#ef4444] flex items-center gap-1 animate-pulse">
+                <Clock size={12} /> {game.time}
+              </div>
+            </div>
+            <div className="p-4 grid grid-cols-3 items-center gap-2">
+              {/* Blue Team Player */}
+              <div className="text-center flex flex-col items-center gap-2">
                 <img
-                  src={`https://ddragon.leagueoflegends.com/cdn/14.8.1/img/profileicon/${detectedAccount.profileIconId}.png`}
-                  alt="Profile"
-                  className="w-32 h-32 rounded-3xl shadow-xl border-4 border-bg-primary"
+                  src={`https://ddragon.leagueoflegends.com/cdn/14.8.1/img/champion/${game.champ1}.png`}
+                  alt={game.champ1}
+                  className="w-12 h-12 rounded-sm border-2 border-[#3b82f6]"
                 />
-                <div className="text-center md:text-left flex-1">
-                  <div className="inline-block px-3 py-1 rounded-full bg-bg-primary/50 text-accent font-medium text-sm mb-3">
-                    Уровень {detectedAccount.summonerLevel}
-                  </div>
-                  <h1 className="text-4xl font-bold text-text-primary mb-2">
-                    {detectedAccount.gameName}
-                    <span className="text-text-muted font-normal text-2xl ml-2">
-                      #{detectedAccount.tagLine}
-                    </span>
-                  </h1>
-                  <p className="text-text-secondary mb-6">
-                    Добро пожаловать обратно! Ваш клиент запущен и готов к работе.
-                  </p>
-                  <button
-                    onClick={onBadgeClick}
-                    className="px-8 py-3 rounded-xl bg-accent hover:bg-accent-hover text-white font-semibold transition-all shadow-lg shadow-accent/20"
-                  >
-                    Перейти в профиль
-                  </button>
-                </div>
+                <div className="text-xs font-bold text-[#e2e8f0] truncate w-full group-hover:text-[#3b82f6] transition-colors">{game.p1}</div>
               </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="bg-bg-card rounded-2xl p-6 border border-border">
-                <TrendingUp className="w-8 h-8 text-win mb-4" />
-                <h4 className="text-text-muted text-sm font-medium mb-1">Статус</h4>
-                <p className="text-xl font-bold text-text-primary">В сети</p>
+              
+              {/* VS */}
+              <div className="text-center text-xs font-black text-[#64748b] italic">
+                VS
               </div>
-              <div className="bg-bg-card rounded-2xl p-6 border border-border">
-                <Gamepad2 className="w-8 h-8 text-accent mb-4" />
-                <h4 className="text-text-muted text-sm font-medium mb-1">Последняя игра</h4>
-                <p className="text-xl font-bold text-text-primary">Победа</p>
-              </div>
-              <div className="bg-bg-card rounded-2xl p-6 border border-border">
-                <Star className="w-8 h-8 text-gold mb-4" />
-                <h4 className="text-text-muted text-sm font-medium mb-1">Мастерство</h4>
-                <p className="text-xl font-bold text-text-primary">Топ 3</p>
+              
+              {/* Red Team Player */}
+              <div className="text-center flex flex-col items-center gap-2">
+                <img
+                  src={`https://ddragon.leagueoflegends.com/cdn/14.8.1/img/champion/${game.champ2}.png`}
+                  alt={game.champ2}
+                  className="w-12 h-12 rounded-sm border-2 border-[#ef4444]"
+                />
+                <div className="text-xs font-bold text-[#e2e8f0] truncate w-full group-hover:text-[#ef4444] transition-colors">{game.p2}</div>
               </div>
             </div>
           </div>
-        ) : (
-          <div className="h-full flex flex-col items-center justify-center bg-bg-card/30 rounded-3xl border border-border/50 p-12 text-center">
-            <div className="w-24 h-24 bg-bg-card rounded-3xl flex items-center justify-center mb-6 shadow-inner">
-              <Eye size={40} className="text-text-muted" />
-            </div>
-            <h2 className="text-2xl font-bold text-text-primary mb-3">
-              Клиент не обнаружен
-            </h2>
-            <p className="text-text-muted max-w-md mx-auto mb-8">
-              Запустите League of Legends, чтобы мы могли автоматически определить ваш профиль и показывать статистику в реальном времени.
-            </p>
-            <div className="flex items-center gap-2 text-sm font-medium text-accent bg-accent/10 px-4 py-2 rounded-full">
-              <div className="w-2 h-2 rounded-full bg-accent animate-pulse" />
-              Ожидание клиента...
-            </div>
-          </div>
-        )}
+        ))}
       </div>
     </div>
   );

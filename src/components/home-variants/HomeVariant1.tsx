@@ -1,5 +1,4 @@
-import { SearchBar } from "../SearchBar";
-import { Eye, Trophy, Activity, ArrowRight } from "lucide-react";
+import { Trophy, TrendingUp, ChevronRight } from "lucide-react";
 import type { DetectedAccount } from "../../lib/types";
 
 interface Props {
@@ -9,79 +8,141 @@ interface Props {
   loading: boolean;
 }
 
-export function HomeVariant1({ detectedAccount, onSearch, onBadgeClick, loading }: Props) {
+const LEADERBOARD = [
+  { rank: 1, name: "Hide on bush", lp: 1842, winrate: "58%", wins: 412, losses: 298 },
+  { rank: 2, name: "Canyon", lp: 1756, winrate: "61%", wins: 380, losses: 243 },
+  { rank: 3, name: "Chovy", lp: 1690, winrate: "59%", wins: 350, losses: 243 },
+  { rank: 4, name: "ShowMaker", lp: 1620, winrate: "56%", wins: 420, losses: 330 },
+  { rank: 5, name: "Zeus", lp: 1580, winrate: "55%", wins: 450, losses: 368 },
+];
+
+const META_CHAMPS = [
+  { name: "Ahri", tier: "S+", winrate: "52.4%", pickrate: "18.2%", banrate: "12.1%" },
+  { name: "Jinx", tier: "S+", winrate: "51.8%", pickrate: "24.5%", banrate: "8.4%" },
+  { name: "LeeSin", tier: "S", winrate: "49.5%", pickrate: "28.1%", banrate: "15.6%" },
+  { name: "Thresh", tier: "S", winrate: "50.2%", pickrate: "19.8%", banrate: "5.2%" },
+  { name: "Aatrox", tier: "A", winrate: "48.9%", pickrate: "15.4%", banrate: "22.1%" },
+];
+
+export function HomeVariant1({ detectedAccount, onBadgeClick }: Props) {
   return (
-    <div className="flex flex-col items-center justify-center min-h-[70vh] gap-8 relative">
-      {/* Background glow */}
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-accent/10 rounded-full blur-[120px] -z-10 pointer-events-none" />
-
-      <div className="text-center space-y-4 mb-4">
-        <div className="flex items-center justify-center gap-3 mb-6">
-          <div className="p-4 bg-accent/10 rounded-2xl">
-            <Eye size={48} className="text-accent" />
-          </div>
-        </div>
-        <h1 className="text-5xl font-bold text-text-primary tracking-tight">
-          League<span className="text-accent">Eye</span>
-        </h1>
-        <p className="text-text-secondary text-lg max-w-md mx-auto">
-          Ваш персональный помощник в League of Legends. Статистика, история матчей и AI-аналитика.
-        </p>
-      </div>
-
-      <div className="w-full max-w-2xl bg-bg-card/50 backdrop-blur-sm p-6 rounded-3xl border border-border/50 shadow-2xl">
-        <SearchBar onSearch={onSearch} loading={loading} />
-      </div>
-
+    <div className="max-w-7xl mx-auto py-6">
+      {/* Account Banner (if connected) */}
       {detectedAccount && (
-        <div className="mt-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-          <button
-            onClick={onBadgeClick}
-            className="group flex items-center gap-4 p-4 pr-6 rounded-2xl bg-bg-card border border-border hover:border-accent/50 transition-all hover:bg-bg-hover"
-          >
-            <div className="relative">
-              <img
-                src={`https://ddragon.leagueoflegends.com/cdn/14.8.1/img/profileicon/${detectedAccount.profileIconId}.png`}
-                alt="Profile"
-                className="w-14 h-14 rounded-xl"
-              />
-              <div className="absolute -bottom-2 -right-2 bg-bg-primary px-2 py-0.5 rounded-md text-xs font-bold border border-border">
-                {detectedAccount.summonerLevel}
+        <div className="mb-6 bg-[#1a1d28] border border-[#2a2d3a] rounded-sm p-4 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <img
+              src={`https://ddragon.leagueoflegends.com/cdn/14.8.1/img/profileicon/${detectedAccount.profileIconId}.png`}
+              alt="Profile"
+              className="w-12 h-12 rounded-sm"
+            />
+            <div>
+              <div className="text-xs text-[#94a3b8] font-semibold uppercase tracking-wider mb-0.5">Клиент подключен</div>
+              <div className="text-base font-bold text-[#e2e8f0]">
+                {detectedAccount.gameName} <span className="text-[#64748b] font-normal">#{detectedAccount.tagLine}</span>
               </div>
             </div>
-            <div className="text-left">
-              <p className="text-sm text-text-muted mb-0.5">Добро пожаловать</p>
-              <p className="font-bold text-text-primary text-lg">
-                {detectedAccount.gameName}
-                <span className="text-text-muted font-normal text-sm ml-1">
-                  #{detectedAccount.tagLine}
-                </span>
-              </p>
-            </div>
-            <ArrowRight className="ml-4 text-text-muted group-hover:text-accent transition-colors" />
+          </div>
+          <button
+            onClick={onBadgeClick}
+            className="px-4 py-2 bg-[#3b82f6] hover:bg-[#2563eb] text-white text-sm font-bold rounded-sm transition-colors"
+          >
+            Мой профиль
           </button>
         </div>
       )}
 
-      {!detectedAccount && (
-        <div className="grid grid-cols-3 gap-6 mt-12 text-center max-w-3xl">
-          <div className="p-6 rounded-2xl bg-bg-card/30 border border-border/30">
-            <Activity className="w-8 h-8 text-accent mx-auto mb-3" />
-            <h3 className="font-medium text-text-primary mb-1">Live Аналитика</h3>
-            <p className="text-sm text-text-muted">Отслеживайте текущие матчи в реальном времени</p>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Leaderboard */}
+        <div className="bg-[#1a1d28] border border-[#2a2d3a] rounded-sm">
+          <div className="px-4 py-3 border-b border-[#2a2d3a] flex items-center gap-2">
+            <Trophy size={16} className="text-[#eab308]" />
+            <h2 className="text-sm font-bold text-[#e2e8f0] uppercase tracking-wider">Топ игроков (Challenger)</h2>
           </div>
-          <div className="p-6 rounded-2xl bg-bg-card/30 border border-border/30">
-            <Trophy className="w-8 h-8 text-gold mx-auto mb-3" />
-            <h3 className="font-medium text-text-primary mb-1">Детальная Статистика</h3>
-            <p className="text-sm text-text-muted">Изучайте историю игр и винрейт чемпионов</p>
+          <div className="p-0">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-[#1e2130] text-[#64748b] text-xs uppercase">
+                <tr>
+                  <th className="px-4 py-2 font-semibold">Ранг</th>
+                  <th className="px-4 py-2 font-semibold">Призыватель</th>
+                  <th className="px-4 py-2 font-semibold text-right">LP</th>
+                  <th className="px-4 py-2 font-semibold text-right">Винрейт</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#2a2d3a]">
+                {LEADERBOARD.map((player) => (
+                  <tr key={player.rank} className="hover:bg-[#252838] transition-colors cursor-pointer group">
+                    <td className="px-4 py-3 font-bold text-[#94a3b8] w-12">{player.rank}</td>
+                    <td className="px-4 py-3 font-bold text-[#e2e8f0] group-hover:text-[#3b82f6] transition-colors">
+                      {player.name}
+                    </td>
+                    <td className="px-4 py-3 text-right font-medium text-[#eab308]">{player.lp}</td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="font-medium text-[#e2e8f0]">{player.winrate}</div>
+                      <div className="text-xs text-[#64748b]">{player.wins}W {player.losses}L</div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-          <div className="p-6 rounded-2xl bg-bg-card/30 border border-border/30">
-            <Eye className="w-8 h-8 text-win mx-auto mb-3" />
-            <h3 className="font-medium text-text-primary mb-1">AI Тренер</h3>
-            <p className="text-sm text-text-muted">Получайте советы от искусственного интеллекта</p>
+          <div className="px-4 py-3 border-t border-[#2a2d3a] text-center">
+            <button className="text-xs font-bold text-[#3b82f6] hover:text-[#2563eb] uppercase tracking-wider flex items-center justify-center gap-1 w-full">
+              Полный рейтинг <ChevronRight size={14} />
+            </button>
           </div>
         </div>
-      )}
+
+        {/* Meta Champions */}
+        <div className="bg-[#1a1d28] border border-[#2a2d3a] rounded-sm">
+          <div className="px-4 py-3 border-b border-[#2a2d3a] flex items-center gap-2">
+            <TrendingUp size={16} className="text-[#22c55e]" />
+            <h2 className="text-sm font-bold text-[#e2e8f0] uppercase tracking-wider">Мета чемпионов (Патч 14.8)</h2>
+          </div>
+          <div className="p-0">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-[#1e2130] text-[#64748b] text-xs uppercase">
+                <tr>
+                  <th className="px-4 py-2 font-semibold">Чемпион</th>
+                  <th className="px-4 py-2 font-semibold text-center">Тир</th>
+                  <th className="px-4 py-2 font-semibold text-right">Винрейт</th>
+                  <th className="px-4 py-2 font-semibold text-right">Пикрейт</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#2a2d3a]">
+                {META_CHAMPS.map((champ) => (
+                  <tr key={champ.name} className="hover:bg-[#252838] transition-colors cursor-pointer">
+                    <td className="px-4 py-3 flex items-center gap-3">
+                      <img
+                        src={`https://ddragon.leagueoflegends.com/cdn/14.8.1/img/champion/${champ.name}.png`}
+                        alt={champ.name}
+                        className="w-8 h-8 rounded-sm"
+                      />
+                      <span className="font-bold text-[#e2e8f0]">{champ.name}</span>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={`inline-block px-2 py-0.5 rounded-sm text-xs font-bold ${
+                        champ.tier === 'S+' ? 'bg-[#ef4444]/20 text-[#ef4444]' :
+                        champ.tier === 'S' ? 'bg-[#f97316]/20 text-[#f97316]' :
+                        'bg-[#3b82f6]/20 text-[#3b82f6]'
+                      }`}>
+                        {champ.tier}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-right font-medium text-[#e2e8f0]">{champ.winrate}</td>
+                    <td className="px-4 py-3 text-right text-[#94a3b8]">{champ.pickrate}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="px-4 py-3 border-t border-[#2a2d3a] text-center">
+            <button className="text-xs font-bold text-[#3b82f6] hover:text-[#2563eb] uppercase tracking-wider flex items-center justify-center gap-1 w-full">
+              Вся статистика <ChevronRight size={14} />
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
