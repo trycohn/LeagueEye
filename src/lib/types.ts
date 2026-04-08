@@ -153,6 +153,36 @@ export interface ChampionStat {
   position: string;
 }
 
+// --- Global Dashboard ---
+
+export interface GlobalStats {
+  totalPlayers: number;
+  analyzedMatches: number;
+  hoursPlayed: number;
+  pentakills: number;
+}
+
+export interface BestPlayerRole {
+  role: string;
+  player: string;
+  tag: string;
+  champ: string;
+  winrate: string;
+  kda: string;
+}
+
+export interface TopWinrateChampion {
+  champ: string;
+  winrate: string;
+  games: number;
+}
+
+export interface GlobalDashboardData {
+  stats: GlobalStats;
+  bestByRole: BestPlayerRole[];
+  topWinrates: TopWinrateChampion[];
+}
+
 // --- AI Coach ---
 
 export interface CoachStreamPayload {
