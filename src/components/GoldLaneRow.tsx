@@ -25,10 +25,12 @@ export function GoldLaneRow({ lane }: { lane: LaneGoldComparison }) {
   );
 
   return (
-    <div className="flex items-center gap-1.5">
-      <RoleIcon role={lane.role} size={12} />
-      {champImg(lane.allyChampionName)}
-      <div className="flex flex-col items-stretch shrink-0" style={{ width: 72 }}>
+    <div className="flex items-center justify-between">
+      <div className="flex items-center gap-1.5 shrink-0">
+        <RoleIcon role={lane.role} size={12} />
+        {champImg(lane.allyChampionName)}
+      </div>
+      <div className="flex flex-col items-stretch shrink-0 mx-1.5" style={{ width: 72 }}>
         <p className={`text-[9px] font-bold text-center leading-tight tabular-nums ${diffColor}`}>
           {diffText}
         </p>
