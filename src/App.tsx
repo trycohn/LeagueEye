@@ -9,7 +9,10 @@ import { AccountBadge } from "./components/AccountBadge";
 import { LiveGameView } from "./components/LiveGameView";
 import { useRiotApi } from "./hooks/useRiotApi";
 import { useLiveGame } from "./hooks/useLiveGame";
-import { Eye, AlertCircle, Loader2, ChevronLeft } from "lucide-react";
+import { HomeVariant1 } from "./components/home-variants/HomeVariant1";
+import { HomeVariant2 } from "./components/home-variants/HomeVariant2";
+import { HomeVariant3 } from "./components/home-variants/HomeVariant3";
+import { Eye, AlertCircle, Loader2, ChevronLeft, LayoutTemplate } from "lucide-react";
 import type { DetectedAccount } from "./lib/types";
 
 type View = "home" | "profile" | "live";
@@ -35,6 +38,7 @@ export default function App() {
   } = useRiotApi();
 
   const [view, setView] = useState<View>("home");
+  const [homeVariant, setHomeVariant] = useState<1 | 2 | 3>(1);
   const [prevView, setPrevView] = useState<View>("home");
   const [detectedAccount, setDetectedAccount] =
     useState<DetectedAccount | null>(null);
@@ -159,7 +163,7 @@ export default function App() {
           )}
 
           <div className="flex-1">
-            <SearchBar onSearch={handleSearch} loading={loading} />
+            {view !== "home" && <SearchBar onSearch={handleSearch} loading={loading} />}
           </div>
 
           {detectedAccount && (
@@ -190,18 +194,50 @@ export default function App() {
 
         {/* HOME VIEW */}
         {view === "home" && !loading && !error && (
-          <div className="flex flex-col items-center justify-center py-24 gap-4">
-            <Eye size={48} className="text-text-muted opacity-30" />
-            <p className="text-text-muted text-lg">Введите Riot ID для поиска</p>
-            <p className="text-text-muted text-sm">Например: Player#RU1</p>
-            {detectedAccount && (
-              <button
-                onClick={handleBadgeClick}
-                className="mt-4 px-5 py-2.5 rounded-lg bg-accent text-white font-medium hover:bg-accent/90 transition-colors"
-              >
-                Открыть мой профиль
-              </button>
+          <div className="relative">
+            {homeVariant === 1 && (
+              <HomeVariant1
+                detectedAccount={detectedAccount}
+                onSearch={handleSearch}
+                onBadgeClick={handleBadgeClick}
+                loading={loading}
+              />
             )}
+            {homeVariant === 2 && (
+              <HomeVariant2
+                detectedAccount={detectedAccount}
+                onSearch={handleSearch}
+                onBadgeClick={handleBadgeClick}
+                loading={loading}
+              />
+            )}
+            {homeVariant === 3 && (
+              <HomeVariant3
+                detectedAccount={detectedAccount}
+                onSearch={handleSearch}
+                onBadgeClick={handleBadgeClick}
+                loading={loading}
+              />
+            )}
+
+            {/* Variant Switcher (for demo purposes) */}
+            <div className="fixed bottom-6 right-6 flex items-center gap-2 bg-bg-card/80 backdrop-blur-md border border-border p-2 rounded-2xl shadow-2xl z-50">
+              <LayoutTemplate className="text-text-muted w-5 h-5 ml-2" />
+              <div className="w-px h-6 bg-border mx-2" />
+              {[1, 2, 3].map((v) => (
+                <button
+                  key={v}
+                  onClick={() => setHomeVariant(v as 1 | 2 | 3)}
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center text-sm font-bold transition-all ${
+                    homeVariant === v
+                      ? "bg-accent text-white shadow-lg shadow-accent/20"
+                      : "text-text-muted hover:bg-bg-hover hover:text-text-primary"
+                  }`}
+                >
+                  {v}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
