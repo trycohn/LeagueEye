@@ -53,9 +53,36 @@ async function run() {
   await new Promise(r => setTimeout(r, 1000));
   await page.screenshot({ path: 'Variant3_Immersive.png' });
 
+  // Click variant 4 button
+  await page.evaluate(() => {
+    const btns = Array.from(document.querySelectorAll('button'));
+    const btn = btns.find(b => b.textContent === '4');
+    if (btn) btn.click();
+  });
+  await new Promise(r => setTimeout(r, 1000));
+  await page.screenshot({ path: 'Variant4_Tracker.png' });
+
+  // Click variant 5 button
+  await page.evaluate(() => {
+    const btns = Array.from(document.querySelectorAll('button'));
+    const btn = btns.find(b => b.textContent === '5');
+    if (btn) btn.click();
+  });
+  await new Promise(r => setTimeout(r, 1000));
+  await page.screenshot({ path: 'Variant5_Hub.png' });
+
+  // Click variant 6 button
+  await page.evaluate(() => {
+    const btns = Array.from(document.querySelectorAll('button'));
+    const btn = btns.find(b => b.textContent === '6');
+    if (btn) btn.click();
+  });
+  await new Promise(r => setTimeout(r, 1000));
+  await page.screenshot({ path: 'Variant6_Minimal.png' });
+
   await browser.close();
   await server.close();
-  console.log('Screenshots saved: Variant1_Hero.png, Variant2_Dashboard.png, Variant3_Immersive.png');
+  console.log('Screenshots saved: Variant4_Tracker.png, Variant5_Hub.png, Variant6_Minimal.png');
 }
 
 run().catch(console.error);

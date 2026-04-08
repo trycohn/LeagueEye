@@ -12,6 +12,9 @@ import { useLiveGame } from "./hooks/useLiveGame";
 import { HomeVariant1 } from "./components/home-variants/HomeVariant1";
 import { HomeVariant2 } from "./components/home-variants/HomeVariant2";
 import { HomeVariant3 } from "./components/home-variants/HomeVariant3";
+import { HomeVariant4 } from "./components/home-variants/HomeVariant4";
+import { HomeVariant5 } from "./components/home-variants/HomeVariant5";
+import { HomeVariant6 } from "./components/home-variants/HomeVariant6";
 import { Eye, AlertCircle, Loader2, ChevronLeft, LayoutTemplate } from "lucide-react";
 import type { DetectedAccount } from "./lib/types";
 
@@ -38,7 +41,7 @@ export default function App() {
   } = useRiotApi();
 
   const [view, setView] = useState<View>("home");
-  const [homeVariant, setHomeVariant] = useState<1 | 2 | 3>(1);
+  const [homeVariant, setHomeVariant] = useState<1 | 2 | 3 | 4 | 5 | 6>(4);
   const [prevView, setPrevView] = useState<View>("home");
   const [detectedAccount, setDetectedAccount] =
     useState<DetectedAccount | null>(null);
@@ -220,14 +223,39 @@ export default function App() {
               />
             )}
 
+            {homeVariant === 4 && (
+              <HomeVariant4
+                detectedAccount={detectedAccount}
+                onSearch={handleSearch}
+                onBadgeClick={handleBadgeClick}
+                loading={loading}
+              />
+            )}
+            {homeVariant === 5 && (
+              <HomeVariant5
+                detectedAccount={detectedAccount}
+                onSearch={handleSearch}
+                onBadgeClick={handleBadgeClick}
+                loading={loading}
+              />
+            )}
+            {homeVariant === 6 && (
+              <HomeVariant6
+                detectedAccount={detectedAccount}
+                onSearch={handleSearch}
+                onBadgeClick={handleBadgeClick}
+                loading={loading}
+              />
+            )}
+
             {/* Variant Switcher (for demo purposes) */}
             <div className="fixed bottom-6 right-6 flex items-center gap-2 bg-bg-card/80 backdrop-blur-md border border-border p-2 rounded-2xl shadow-2xl z-50">
               <LayoutTemplate className="text-text-muted w-5 h-5 ml-2" />
               <div className="w-px h-6 bg-border mx-2" />
-              {[1, 2, 3].map((v) => (
+              {[1, 2, 3, 4, 5, 6].map((v) => (
                 <button
                   key={v}
-                  onClick={() => setHomeVariant(v as 1 | 2 | 3)}
+                  onClick={() => setHomeVariant(v as 1 | 2 | 3 | 4 | 5 | 6)}
                   className={`w-8 h-8 rounded-xl flex items-center justify-center text-sm font-bold transition-all ${
                     homeVariant === v
                       ? "bg-accent text-white shadow-lg shadow-accent/20"
