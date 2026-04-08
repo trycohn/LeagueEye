@@ -90,31 +90,27 @@ export function GoldOverlayApp() {
   const headerPad =
     layout === "classic"
       ? "px-3 py-1.5"
-      : layout === "compact"
-        ? "px-2.5 py-1"
-        : layout === "single"
-          ? "px-2 py-1"
-          : "px-2 py-0.5";
+      : layout === "micro"
+        ? "px-2 py-0.5"
+        : "px-2.5 py-1";
 
   const contentPad =
     layout === "classic"
       ? "px-3 py-3"
-      : layout === "compact"
-        ? "px-2.5 py-2"
-        : layout === "single"
-          ? "px-2 py-1.5"
-          : "px-2 py-1";
+      : layout === "micro"
+        ? "px-2 py-1"
+        : "px-2.5 py-2";
 
   const rowGap =
     layout === "classic"
       ? "gap-2.5"
-      : layout === "compact"
+      : layout === "c1" || layout === "c2"
         ? "gap-1.5"
-        : layout === "single"
-          ? "gap-1"
-          : "gap-0.5";
+        : layout === "micro"
+          ? "gap-0.5"
+          : "gap-1.5";
 
-  const showHint = layout === "classic" || layout === "compact";
+  const showHint = layout === "classic";
 
   return (
     <div ref={contentRef} onMouseDown={handleMouseDown} className="select-none">
@@ -127,15 +123,11 @@ export function GoldOverlayApp() {
         >
           <div className="flex items-center gap-1.5 min-w-0">
             <Coins
-              size={layout === "micro" ? 11 : layout === "single" ? 12 : 14}
-              className="text-gold shrink-0"
+              size={layout === "micro" ? 11 : 13}
+              className="text-text-muted shrink-0 opacity-60"
             />
-            <span
-              className={`font-bold text-gold truncate ${
-                layout === "micro" ? "text-[10px]" : "text-xs"
-              }`}
-            >
-              Золото
+            <span className="text-[10px] font-medium text-text-muted opacity-70 truncate tracking-wide uppercase">
+              gold
             </span>
           </div>
           <div className="flex items-center gap-1 shrink-0">

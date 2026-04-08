@@ -1,7 +1,7 @@
 /** Варианты компактности оверлея золота — выбор через ?layout= в gold-overlay.html */
-export type GoldOverlayLayout = "classic" | "compact" | "single" | "micro";
+export type GoldOverlayLayout = "classic" | "compact" | "single" | "micro" | "c1" | "c2";
 
-const LAYOUTS: GoldOverlayLayout[] = ["classic", "compact", "single", "micro"];
+const LAYOUTS: GoldOverlayLayout[] = ["classic", "compact", "single", "micro", "c1", "c2"];
 
 export function parseGoldOverlayLayout(search: string): GoldOverlayLayout {
   const q = new URLSearchParams(search).get("layout");
@@ -16,12 +16,14 @@ export function goldOverlayWidth(layout: GoldOverlayLayout): number {
     case "classic":
       return 280;
     case "compact":
-      return 252;
+    case "c1":
+    case "c2":
+      return 220;
     case "single":
       return 244;
     case "micro":
       return 228;
     default:
-      return 252;
+      return 220;
   }
 }
