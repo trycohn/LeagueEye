@@ -2,9 +2,7 @@ import { BarChart, Users, Activity, Swords } from "lucide-react";
 import type { DetectedAccount } from "../lib/types";
 
 interface Props {
-  detectedAccount: DetectedAccount | null;
   onSearch: (gameName: string, tagLine: string) => void;
-  onBadgeClick: () => void;
   loading: boolean;
 }
 
@@ -31,30 +29,9 @@ const TOP_WINRATES = [
   { champ: "Shen", winrate: "52.9%", games: 1100 },
 ];
 
-export function HomeView({ detectedAccount, onSearch, onBadgeClick }: Props) {
+export function HomeView({ onSearch, loading }: Props) {
   return (
     <div className="max-w-7xl mx-auto py-6">
-      {detectedAccount && (
-        <div className="mb-6 bg-[#1a1d28] border border-[#2a2d3a] rounded-sm p-4 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <img
-              src={`https://ddragon.leagueoflegends.com/cdn/14.8.1/img/profileicon/${detectedAccount.profileIconId}.png`}
-              alt="Profile"
-              className="w-12 h-12 rounded-sm"
-            />
-            <div>
-              <div className="text-xs text-[#94a3b8] font-semibold uppercase tracking-wider mb-0.5">Личный кабинет</div>
-              <div className="text-base font-bold text-[#e2e8f0]">
-                {detectedAccount.gameName} <span className="text-[#64748b] font-normal">#{detectedAccount.tagLine}</span>
-              </div>
-            </div>
-          </div>
-          <button onClick={onBadgeClick} className="px-4 py-2 bg-[#3b82f6] hover:bg-[#2563eb] text-white text-sm font-bold rounded-sm transition-colors">
-            Перейти к статистике
-          </button>
-        </div>
-      )}
-
       {/* Top Global Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         {GLOBAL_STATS.map((stat, i) => (
