@@ -14,11 +14,24 @@ function formatNumber(n: number): string {
 export function HomeView({ onSearch }: Props) {
   const [data, setData] = useState<GlobalDashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  // #region agent log
+  const [debugError, setDebugError] = useState<string | null>(null);
+  // #endregion
 
   useEffect(() => {
     invoke<GlobalDashboardData>("get_global_dashboard")
-      .then(setData)
-      .catch((e) => console.error("get_global_dashboard error:", e))
+      .then((result) => {
+        // #region agent log
+        setDebugError("OK: " + JSON.stringify(result).slice(0, 300));
+        // #endregion
+        setData(result);
+      })
+      .catch((e) => {
+        // #region agent log
+        setDebugError("ERR: " + String(e));
+        // #endregion
+        console.error("get_global_dashboard error:", e);
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -35,6 +48,9 @@ export function HomeView({ onSearch }: Props) {
     return (
       <div className="flex flex-col items-center justify-center py-24 gap-4">
         <p className="text-text-muted">Не удалось загрузить данные</p>
+        {/* #region agent log */}
+        {debugError && <p className="text-xs text-red-400 max-w-2xl break-all mt-4 font-mono">{debugError}</p>}
+        {/* #endregion */}
       </div>
     );
   }

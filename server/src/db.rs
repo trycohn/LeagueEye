@@ -271,15 +271,15 @@ impl Db {
             .fetch_one(&self.pool)
             .await?;
 
-        let analyzed_matches: i64 = sqlx::query_scalar("SELECT COUNT(DISTINCT match_id) FROM matches")
+        let analyzed_matches: i64 = sqlx::query_scalar("SELECT COUNT(DISTINCT match_id)::BIGINT FROM matches")
             .fetch_one(&self.pool)
             .await?;
 
-        let hours_played: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(game_duration) / 3600, 0) FROM matches")
+        let hours_played: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(game_duration)::BIGINT / 3600, 0) FROM matches")
             .fetch_one(&self.pool)
             .await?;
 
-        let pentakills: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(penta_kills), 0) FROM match_participants")
+        let pentakills: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(penta_kills)::BIGINT, 0) FROM match_participants")
             .fetch_one(&self.pool)
             .await?;
 
