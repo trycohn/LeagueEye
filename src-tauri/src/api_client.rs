@@ -151,23 +151,25 @@ impl ServerApiClient {
             return Err(msg);
         }
 
-        // Read SSE stream from server and forward as Tauri events
+        // Read SSE stream from server line-by-line and forward as Tauri events.
+        // Using single-newline parsing to avoid buffering delays from waiting for "\n\n".
         let mut buffer = String::new();
         let mut response = response;
 
         while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
             buffer.push_str(&String::from_utf8_lossy(&chunk));
 
-            while let Some(pos) = buffer.find("\n\n") {
-                let event_block = buffer[..pos].to_string();
-                buffer = buffer[pos + 2..].to_string();
+            while let Some(pos) = buffer.find('\n') {
+                let line = buffer[..pos].trim_end().to_string();
+                buffer = buffer[pos + 1..].to_string();
 
-                for line in event_block.lines() {
-                    if let Some(data) = line.strip_prefix("data:") {
-                        let data = data.trim_start();
-                        if let Ok(payload) = serde_json::from_str::<CoachStreamPayload>(data) {
-                            let _ = app.emit("coach-stream", &payload);
-                        }
+                if line.is_empty() || line.starts_with(':') {
+                    continue;
+                }
+                if let Some(data) = line.strip_prefix("data:") {
+                    let data = data.trim_start();
+                    if let Ok(payload) = serde_json::from_str::<CoachStreamPayload>(data) {
+                        let _ = app.emit("coach-stream", &payload);
                     }
                 }
             }

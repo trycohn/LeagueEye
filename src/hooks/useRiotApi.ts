@@ -30,25 +30,23 @@ export function useRiotApi() {
   const loadProfileByPuuid = useCallback(
     async (p: PlayerProfile) => {
       const gen = ++genRef.current;
-      setProfile(p);
       setCurrentPuuid(p.puuid);
 
-      const masteryPromise = invoke<MasteryInfo[]>("get_mastery", { puuid: p.puuid });
-      const matchesAndStats = await invoke<MatchesAndStats>("get_matches_and_stats", { puuid: p.puuid });
+      const [matchesAndStats, masteryData] = await Promise.all([
+        invoke<MatchesAndStats>("get_matches_and_stats", { puuid: p.puuid }),
+        invoke<MasteryInfo[]>("get_mastery", { puuid: p.puuid }).catch(() => [] as MasteryInfo[]),
+      ]);
 
       if (gen !== genRef.current) return;
 
+      setProfile(p);
       setMatches(matchesAndStats.matches);
       setChampionStats(matchesAndStats.championStats);
       setTotalCached(matchesAndStats.totalCached);
       setTotalWins(matchesAndStats.totalWins);
       setTotalLosses(matchesAndStats.totalLosses);
       setHasMore(matchesAndStats.matches.length < matchesAndStats.totalCached);
-
-      masteryPromise.then((masteryData) => {
-        if (gen !== genRef.current) return;
-        setMastery(masteryData);
-      }).catch(() => {});
+      setMastery(masteryData);
     },
     []
   );

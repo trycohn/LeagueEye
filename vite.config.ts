@@ -18,7 +18,8 @@ export default defineConfig({
     },
   },
   server: {
-    host: host || false,
+    // 127.0.0.1 avoids VPN/DNS issues where localhost resolves or routes oddly on Windows
+    host: host || "127.0.0.1",
     port: 5173,
     strictPort: true,
     hmr: host ? { protocol: "ws", host, port: 5174 } : undefined,

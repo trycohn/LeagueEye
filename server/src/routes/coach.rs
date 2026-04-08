@@ -166,6 +166,11 @@ pub async fn stream_coach(
     let user_message = build_user_message(&ctx);
 
     Sse::new(make_ai_stream(config, system_prompt, user_message))
+        .keep_alive(
+            axum::response::sse::KeepAlive::new()
+                .interval(std::time::Duration::from_secs(15))
+                .text("ping"),
+        )
 }
 
 type CoachStream = Pin<Box<dyn Stream<Item = Result<Event, std::convert::Infallible>> + Send>>;
@@ -274,49 +279,51 @@ fn make_anthropic_stream(
             return;
         }
 
-        // Read SSE stream from Anthropic and forward deltas
+        // Read SSE stream from Anthropic line-by-line (same approach as OpenRouter).
         let mut buffer = String::new();
 
         while let Some(chunk) = response.chunk().await.ok().flatten() {
             buffer.push_str(&String::from_utf8_lossy(&chunk));
 
-            while let Some(pos) = buffer.find("\n\n") {
-                let event_block = buffer[..pos].to_string();
-                buffer = buffer[pos + 2..].to_string();
+            while let Some(pos) = buffer.find('\n') {
+                let line = buffer[..pos].trim_end().to_string();
+                buffer = buffer[pos + 1..].to_string();
 
-                for line in event_block.lines() {
-                    if let Some(data) = line.strip_prefix("data: ") {
-                        if data == "[DONE]" {
-                            continue;
-                        }
-                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
-                            if parsed.get("type").and_then(|t| t.as_str()) == Some("content_block_delta") {
-                                if let Some(text) = parsed
-                                    .get("delta")
-                                    .and_then(|d| d.get("text"))
-                                    .and_then(|t| t.as_str())
-                                {
-                                    yield Ok(Event::default().data(
-                                        serde_json::to_string(&CoachStreamPayload {
-                                            kind: "delta".to_string(),
-                                            text: Some(text.to_string()),
-                                        }).unwrap()
-                                    ));
-                                }
-                            }
-                            if parsed.get("type").and_then(|t| t.as_str()) == Some("error") {
-                                let err_msg = parsed.get("error")
-                                    .and_then(|e| e.get("message"))
-                                    .and_then(|m| m.as_str())
-                                    .unwrap_or("Unknown AI error");
+                if line.is_empty() || line.starts_with("event:") {
+                    continue;
+                }
+                if let Some(data) = line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) {
+                    let data = data.trim_start();
+                    if data == "[DONE]" {
+                        continue;
+                    }
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                        if parsed.get("type").and_then(|t| t.as_str()) == Some("content_block_delta") {
+                            if let Some(text) = parsed
+                                .get("delta")
+                                .and_then(|d| d.get("text"))
+                                .and_then(|t| t.as_str())
+                            {
                                 yield Ok(Event::default().data(
                                     serde_json::to_string(&CoachStreamPayload {
-                                        kind: "error".to_string(),
-                                        text: Some(err_msg.to_string()),
+                                        kind: "delta".to_string(),
+                                        text: Some(text.to_string()),
                                     }).unwrap()
                                 ));
-                                return;
                             }
+                        }
+                        if parsed.get("type").and_then(|t| t.as_str()) == Some("error") {
+                            let err_msg = parsed.get("error")
+                                .and_then(|e| e.get("message"))
+                                .and_then(|m| m.as_str())
+                                .unwrap_or("Unknown AI error");
+                            yield Ok(Event::default().data(
+                                serde_json::to_string(&CoachStreamPayload {
+                                    kind: "error".to_string(),
+                                    text: Some(err_msg.to_string()),
+                                }).unwrap()
+                            ));
+                            return;
                         }
                     }
                 }
@@ -362,8 +369,6 @@ fn make_openrouter_stream(
 
         let client = reqwest::Client::new();
 
-        // OpenRouter uses OpenAI-compatible Chat Completions API.
-        // Docs: https://openrouter.ai/docs/api/reference/overview
         let body = serde_json::json!({
             "model": config.model,
             "stream": true,
@@ -421,61 +426,56 @@ fn make_openrouter_stream(
             return;
         }
 
-        // Read SSE stream from OpenRouter and forward deltas (OpenAI style).
-        // - Data lines: "data: {json}"
-        // - End: "data: [DONE]"
-        // - Comments: ": OPENROUTER PROCESSING" (ignore)
+        // Read SSE stream from OpenRouter line-by-line.
+        // OpenRouter often sends "data: {...}\n" with a single newline rather
+        // than the double-newline that the SSE spec technically requires.
+        // Waiting for "\n\n" causes massive buffering delays.
         let mut buffer = String::new();
 
         while let Some(chunk) = response.chunk().await.ok().flatten() {
             buffer.push_str(&String::from_utf8_lossy(&chunk));
 
-            while let Some(pos) = buffer.find("\n\n") {
-                let event_block = buffer[..pos].to_string();
-                buffer = buffer[pos + 2..].to_string();
+            while let Some(pos) = buffer.find('\n') {
+                let line = buffer[..pos].trim_end().to_string();
+                buffer = buffer[pos + 1..].to_string();
 
-                for line in event_block.lines() {
-                    let line = line.trim_end();
-                    if line.starts_with(':') {
+                if line.is_empty() || line.starts_with(':') {
+                    continue;
+                }
+                if let Some(data) = line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) {
+                    let data = data.trim_start();
+                    if data == "[DONE]" {
                         continue;
                     }
-                    if let Some(data) = line.strip_prefix("data: ") {
-                        if data == "[DONE]" {
-                            continue;
-                        }
-                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
-                            // Typical shape:
-                            // { "choices":[ { "delta": { "content": "..." }, "finish_reason": null } ], ... }
-                            let content = parsed
-                                .get("choices")
-                                .and_then(|c| c.get(0))
-                                .and_then(|c0| c0.get("delta"))
-                                .and_then(|d| d.get("content"))
-                                .and_then(|t| t.as_str());
-                            if let Some(text) = content {
-                                if !text.is_empty() {
-                                    yield Ok(Event::default().data(
-                                        serde_json::to_string(&CoachStreamPayload {
-                                            kind: "delta".to_string(),
-                                            text: Some(text.to_string()),
-                                        }).unwrap()
-                                    ));
-                                }
-                            }
-
-                            // Some providers may stream errors as JSON.
-                            if let Some(err_msg) = parsed.get("error")
-                                .and_then(|e| e.get("message"))
-                                .and_then(|m| m.as_str())
-                            {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                        let content = parsed
+                            .get("choices")
+                            .and_then(|c| c.get(0))
+                            .and_then(|c0| c0.get("delta"))
+                            .and_then(|d| d.get("content"))
+                            .and_then(|t| t.as_str());
+                        if let Some(text) = content {
+                            if !text.is_empty() {
                                 yield Ok(Event::default().data(
                                     serde_json::to_string(&CoachStreamPayload {
-                                        kind: "error".to_string(),
-                                        text: Some(err_msg.to_string()),
+                                        kind: "delta".to_string(),
+                                        text: Some(text.to_string()),
                                     }).unwrap()
                                 ));
-                                return;
                             }
+                        }
+
+                        if let Some(err_msg) = parsed.get("error")
+                            .and_then(|e| e.get("message"))
+                            .and_then(|m| m.as_str())
+                        {
+                            yield Ok(Event::default().data(
+                                serde_json::to_string(&CoachStreamPayload {
+                                    kind: "error".to_string(),
+                                    text: Some(err_msg.to_string()),
+                                }).unwrap()
+                            ));
+                            return;
                         }
                     }
                 }

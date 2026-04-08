@@ -455,6 +455,75 @@ pub async fn get_champion_stats(
     Ok(result.champion_stats)
 }
 
+// ─── TEST: test_coaching — тест стриминга без LCU, удалить после тестирования ─
+
+#[tauri::command]
+pub async fn test_coaching(
+    app: tauri::AppHandle,
+    api: State<'_, ServerApiClient>,
+    coach_state: State<'_, Arc<Mutex<CoachState>>>,
+    message: String,
+) -> Result<(), String> {
+    {
+        let mut state = coach_state.lock().map_err(|e| e.to_string())?;
+        if state.is_requesting {
+            return Err("Запрос уже выполняется".to_string());
+        }
+        state.is_requesting = true;
+    }
+
+    let ctx = leagueeye_shared::models::CoachingContext {
+        phase: "in_game".to_string(),
+        game_time_secs: Some(600),
+        my_champion: "Jinx".to_string(),
+        my_position: "BOTTOM".to_string(),
+        my_gold: Some(5000.0),
+        my_summoner_spells: vec!["Flash".into(), "Heal".into()],
+        my_runes: Some("Lethal Tempo (Precision / Sorcery)".into()),
+        my_stats: None,
+        my_team: vec![
+            leagueeye_shared::models::CoachPlayerInfo {
+                champion_name: "Jinx".into(),
+                position: "BOTTOM".into(),
+                rank_display: "Gold II 50 LP".into(),
+                kills: 3, deaths: 1, assists: 2, cs: 120, level: 9,
+                items: vec!["Kraken Slayer".into(), "Berserker's Greaves".into()],
+                summoner_spells: vec!["Flash".into(), "Heal".into()],
+                keystone_rune: "Lethal Tempo".into(),
+                is_dead: false, respawn_timer: 0.0,
+            },
+        ],
+        enemy_team: vec![
+            leagueeye_shared::models::CoachPlayerInfo {
+                champion_name: "Caitlyn".into(),
+                position: "BOTTOM".into(),
+                rank_display: "Gold I 30 LP".into(),
+                kills: 2, deaths: 2, assists: 1, cs: 110, level: 9,
+                items: vec!["Infinity Edge".into()],
+                summoner_spells: vec!["Flash".into(), "Heal".into()],
+                keystone_rune: "Fleet Footwork".into(),
+                is_dead: false, respawn_timer: 0.0,
+            },
+        ],
+        recent_events: vec![
+            format!("[10:00] Тестовый запрос от пользователя: {}", message),
+        ],
+    };
+
+    let api_client = api.inner().clone();
+    let coach_state_arc = Arc::clone(&*coach_state);
+    let app_handle = app.clone();
+
+    tokio::spawn(async move {
+        let _ = api_client.stream_coaching(&app_handle, &ctx).await;
+        if let Ok(mut s) = coach_state_arc.lock() {
+            s.is_requesting = false;
+        }
+    });
+
+    Ok(())
+}
+
 // ─── request_coaching (AI Coach) ─────────────────────────────────────────────
 
 #[tauri::command]

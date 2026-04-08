@@ -10,8 +10,9 @@ import { LiveGameView } from "./components/LiveGameView";
 import { useRiotApi } from "./hooks/useRiotApi";
 import { useLiveGame } from "./hooks/useLiveGame";
 import { HomeView } from "./components/HomeView";
-import { Eye, AlertCircle, Loader2, ChevronLeft } from "lucide-react";
+import { Eye, AlertCircle, Loader2, ChevronLeft, FlaskConical } from "lucide-react";
 import type { DetectedAccount } from "./lib/types";
+import { AiTestDialog } from "./components/AiTestDialog"; // TEST: удалить после тестирования
 
 type View = "home" | "profile" | "live";
 
@@ -40,6 +41,7 @@ export default function App() {
   const [detectedAccount, setDetectedAccount] =
     useState<DetectedAccount | null>(null);
   const [clientOnline, setClientOnline] = useState(false);
+  const [showAiTest, setShowAiTest] = useState(false); // TEST: удалить после тестирования
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { liveData, phase } = useLiveGame(clientOnline);
@@ -149,6 +151,16 @@ export default function App() {
             <h1 className="text-lg font-bold text-text-primary">LeagueEye</h1>
           </button>
 
+          {/* TEST: кнопка тестирования AI, удалить после тестирования */}
+          <button
+            onClick={() => setShowAiTest(true)}
+            className="flex items-center gap-1 px-2 py-1 rounded-lg bg-loss/10 text-loss text-xs font-medium hover:bg-loss/20 transition-colors border border-loss/20"
+            title="Тест AI стриминга"
+          >
+            <FlaskConical size={14} />
+            AI Test
+          </button>
+
           {isLive && (
             <button
               onClick={() => setView("live")}
@@ -248,6 +260,9 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {/* TEST: диалог тестирования AI, удалить после тестирования */}
+      {showAiTest && <AiTestDialog onClose={() => setShowAiTest(false)} />}
     </div>
   );
 }
