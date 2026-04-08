@@ -32,36 +32,36 @@ async function run() {
   // Wait for the app to render
   await new Promise(r => setTimeout(r, 2000));
 
-  // Click variant 4 button
+  // Click variant 7 button
   await page.evaluate(() => {
     const btns = Array.from(document.querySelectorAll('button'));
-    const btn = btns.find(b => b.textContent === '4');
+    const btn = btns.find(b => b.textContent === '7');
     if (btn) btn.click();
   });
   await new Promise(r => setTimeout(r, 1000));
-  await page.screenshot({ path: 'Variant4_ProLPTracker.png' });
+  await page.screenshot({ path: 'Variant7_GlobalTracker.png' });
 
-  // Click variant 5 button
+  // Click variant 8 button
   await page.evaluate(() => {
     const btns = Array.from(document.querySelectorAll('button'));
-    const btn = btns.find(b => b.textContent === '5');
+    const btn = btns.find(b => b.textContent === '8');
     if (btn) btn.click();
   });
   await new Promise(r => setTimeout(r, 1000));
-  await page.screenshot({ path: 'Variant5_ProMastery.png' });
+  await page.screenshot({ path: 'Variant8_AnalyticsDashboard.png' });
 
-  // Click variant 6 button
+  // Click variant 9 button
   await page.evaluate(() => {
     const btns = Array.from(document.querySelectorAll('button'));
-    const btn = btns.find(b => b.textContent === '6');
+    const btn = btns.find(b => b.textContent === '9');
     if (btn) btn.click();
   });
   await new Promise(r => setTimeout(r, 1000));
-  await page.screenshot({ path: 'Variant6_ProLocalLeaderboard.png' });
+  await page.screenshot({ path: 'Variant9_CommunityHub.png' });
 
   await browser.close();
   await server.close();
-  console.log('Screenshots saved: Variant4_ProLPTracker.png, Variant5_ProMastery.png, Variant6_ProLocalLeaderboard.png');
+  console.log('Screenshots saved: Variant7_GlobalTracker.png, Variant8_AnalyticsDashboard.png, Variant9_CommunityHub.png');
 }
 
 run().catch(console.error);
