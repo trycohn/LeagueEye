@@ -18,7 +18,7 @@ export function goldOverlayWidth(layout: GoldOverlayLayout): number {
     case "compact":
     case "c1":
     case "c2":
-      return 220;
+      return 196;
     case "single":
       return 244;
     case "micro":

@@ -9,11 +9,6 @@ function formatGold(gold: number): string {
   return gold.toString();
 }
 
-function formatGoldFull(gold: number): string {
-  if (gold >= 1000) return `${(gold / 1000).toFixed(1)}k`;
-  return gold.toString();
-}
-
 export function GoldLaneRow({
   lane,
   layout,
@@ -29,74 +24,20 @@ export function GoldLaneRow({
   const barBg = "rgba(239,68,68,0.25)";
   const barAlly = diff >= 0 ? "rgba(34,197,94,0.65)" : "rgba(34,197,94,0.35)";
 
-  const champImg = (name: string) => (
+  const champImg = (name: string, size: "sm" | "md" = "sm") => (
     <img
       src={championIconUrl(name)}
       alt={name}
-      className="w-6 h-6 rounded shrink-0"
+      className={size === "md" ? "w-8 h-8 rounded shrink-0" : "w-6 h-6 rounded shrink-0"}
       onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
     />
   );
-
-  // ── c1: compact + иконки ролей + короткий бар (75% ширины) ──────────────
-  if (layout === "c1") {
-    return (
-      <div className="flex items-center gap-1.5">
-        <RoleIcon role={lane.role} size={11} />
-        {champImg(lane.allyChampionName)}
-        <div className="flex flex-col justify-center" style={{ width: "75%" }}>
-          <div className="flex items-center gap-1">
-            <div
-              className="flex-1 h-1.5 rounded-full overflow-hidden flex"
-              style={{ background: barBg }}
-            >
-              <div
-                className="h-full rounded-l-full transition-all duration-700"
-                style={{ width: `${allyPct}%`, background: barAlly }}
-              />
-            </div>
-            <span className={`text-[9px] font-bold tabular-nums shrink-0 w-[2.2rem] text-right ${diffColor}`}>
-              {diffText}
-            </span>
-          </div>
-        </div>
-        {champImg(lane.enemyChampionName)}
-      </div>
-    );
-  }
-
-  // ── c2: compact + иконки ролей + числа вместо бара ──────────────────────
-  if (layout === "c2") {
-    return (
-      <div className="flex items-center gap-1.5">
-        <RoleIcon role={lane.role} size={11} />
-        {champImg(lane.allyChampionName)}
-        <div className="flex-1 flex items-center justify-center gap-1 min-w-0">
-          <span className="text-[9px] font-semibold tabular-nums text-win opacity-80">
-            {formatGoldFull(lane.allyGold)}
-          </span>
-          <span className={`text-[10px] font-bold tabular-nums ${diffColor} shrink-0`}>
-            {diffText}
-          </span>
-          <span className="text-[9px] font-semibold tabular-nums text-loss opacity-80">
-            {formatGoldFull(lane.enemyGold)}
-          </span>
-        </div>
-        {champImg(lane.enemyChampionName)}
-      </div>
-    );
-  }
 
   // ── classic ──────────────────────────────────────────────────────────────
   if (layout === "classic") {
     return (
       <div className="flex items-center gap-2">
-        <img
-          src={championIconUrl(lane.allyChampionName)}
-          alt={lane.allyChampionName}
-          className="w-8 h-8 rounded shrink-0"
-          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-        />
+        {champImg(lane.allyChampionName, "md")}
         <div className="flex-1 min-w-0">
           <p className={`text-[10px] font-bold text-center leading-tight ${diffColor}`}>{diffText}</p>
           <div className="h-2.5 rounded-full overflow-hidden flex" style={{ background: barBg }}>
@@ -104,37 +45,12 @@ export function GoldLaneRow({
               style={{ width: `${allyPct}%`, background: barAlly }} />
           </div>
         </div>
-        <img
-          src={championIconUrl(lane.enemyChampionName)}
-          alt={lane.enemyChampionName}
-          className="w-8 h-8 rounded shrink-0"
-          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-        />
+        {champImg(lane.enemyChampionName, "md")}
       </div>
     );
   }
 
-  // ── compact / single / micro ─────────────────────────────────────────────
-  if (layout === "single") {
-    return (
-      <div className="flex items-center gap-1.5">
-        <RoleIcon role={lane.role} size={11} />
-        {champImg(lane.allyChampionName)}
-        <div className="flex-1 min-w-0 relative h-5 flex items-center">
-          <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-2 rounded-full overflow-hidden flex"
-            style={{ background: barBg }}>
-            <div className="h-full rounded-l-full transition-all duration-700"
-              style={{ width: `${allyPct}%`, background: barAlly }} />
-          </div>
-          <p className={`relative z-[1] w-full text-center font-bold leading-none text-[8px] ${diffColor} drop-shadow-[0_1px_2px_rgba(0,0,0,0.85)]`}>
-            {diffText}
-          </p>
-        </div>
-        {champImg(lane.enemyChampionName)}
-      </div>
-    );
-  }
-
+  // ── micro ─────────────────────────────────────────────────────────────────
   if (layout === "micro") {
     return (
       <div className="flex items-center gap-1">
@@ -157,16 +73,43 @@ export function GoldLaneRow({
     );
   }
 
-  // compact (default)
+  // ── single ────────────────────────────────────────────────────────────────
+  if (layout === "single") {
+    return (
+      <div className="flex items-center gap-1.5">
+        <RoleIcon role={lane.role} size={11} />
+        {champImg(lane.allyChampionName)}
+        <div className="flex-1 min-w-0 relative h-5 flex items-center">
+          <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-2 rounded-full overflow-hidden flex"
+            style={{ background: barBg }}>
+            <div className="h-full rounded-l-full transition-all duration-700"
+              style={{ width: `${allyPct}%`, background: barAlly }} />
+          </div>
+          <p className={`relative z-[1] w-full text-center font-bold leading-none text-[8px] ${diffColor} drop-shadow-[0_1px_2px_rgba(0,0,0,0.85)]`}>
+            {diffText}
+          </p>
+        </div>
+        {champImg(lane.enemyChampionName)}
+      </div>
+    );
+  }
+
+  // ── compact / c1 / c2 / default ──────────────────────────────────────────
+  // Фиксированный бар, герои и иконка роли — shrink-0, никакого flex-1 растяжения.
   return (
     <div className="flex items-center gap-1.5">
-      <RoleIcon role={lane.role} size={11} />
+      <RoleIcon role={lane.role} size={12} />
       {champImg(lane.allyChampionName)}
-      <div className="flex-1 min-w-0">
-        <p className={`text-[9px] font-bold text-center leading-tight ${diffColor}`}>{diffText}</p>
-        <div className="h-2 rounded-full overflow-hidden flex" style={{ background: barBg }}>
-          <div className="h-full rounded-l-full transition-all duration-700"
-            style={{ width: `${allyPct}%`, background: barAlly }} />
+      {/* центральный блок: фиксированная ширина, не растягивает ряд */}
+      <div className="flex flex-col items-stretch shrink-0" style={{ width: 72 }}>
+        <p className={`text-[9px] font-bold text-center leading-tight tabular-nums ${diffColor}`}>
+          {diffText}
+        </p>
+        <div className="h-1.5 rounded-full overflow-hidden flex" style={{ background: barBg }}>
+          <div
+            className="h-full rounded-l-full transition-all duration-700"
+            style={{ width: `${allyPct}%`, background: barAlly }}
+          />
         </div>
       </div>
       {champImg(lane.enemyChampionName)}
