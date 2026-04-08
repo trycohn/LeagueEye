@@ -40,6 +40,10 @@ fn create_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Путь к gold overlay. Для сравнения компактных вариантов: `gold-overlay.html?layout=compact`,
+/// `?layout=single`, `?layout=micro` (без query — `classic`, как раньше).
+const GOLD_OVERLAY_WEBVIEW_URL: &str = "gold-overlay.html";
+
 fn create_gold_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("gold-overlay") {
         let _ = win.show();
@@ -47,7 +51,11 @@ fn create_gold_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    let _win = WebviewWindowBuilder::new(app, "gold-overlay", WebviewUrl::App("gold-overlay.html".into()))
+    let _win = WebviewWindowBuilder::new(
+        app,
+        "gold-overlay",
+        WebviewUrl::App(GOLD_OVERLAY_WEBVIEW_URL.into()),
+    )
         .title("LeagueEye Gold")
         .inner_size(280.0, 300.0)
         .always_on_top(true)
@@ -102,7 +110,7 @@ async fn hide_gold_overlay(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 async fn resize_gold_overlay(app: tauri::AppHandle, width: f64, height: f64) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("gold-overlay") {
-        let w = width.max(280.0).min(500.0);
+        let w = width.max(220.0).min(500.0);
         let h = height.max(80.0).min(600.0);
         win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(w, h)))
             .map_err(|e| e.to_string())?;

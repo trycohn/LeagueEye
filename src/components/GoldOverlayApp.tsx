@@ -1,13 +1,26 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { GoldLaneRow } from "./GoldLaneRow";
 import { Coins, X, GripHorizontal, Loader2 } from "lucide-react";
 import type { GoldComparisonData } from "../lib/types";
+import {
+  goldOverlayWidth,
+  parseGoldOverlayLayout,
+  type GoldOverlayLayout,
+} from "../lib/goldOverlayLayout";
 
 const POLL_INTERVAL = 10_000;
 
+function useGoldOverlayLayout(): GoldOverlayLayout {
+  return useMemo(
+    () => parseGoldOverlayLayout(window.location.search),
+    []
+  );
+}
+
 export function GoldOverlayApp() {
+  const layout = useGoldOverlayLayout();
   const [data, setData] = useState<GoldComparisonData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -25,19 +38,19 @@ export function GoldOverlayApp() {
     }
   }, []);
 
-  // Poll on mount + interval
   useEffect(() => {
     fetchData();
     const timer = setInterval(fetchData, POLL_INTERVAL);
     return () => clearInterval(timer);
   }, [fetchData]);
 
-  // Auto-resize
+  const overlayWidth = goldOverlayWidth(layout);
+
   const updateSize = useCallback(() => {
     if (!contentRef.current) return;
     const h = Math.ceil(contentRef.current.getBoundingClientRect().height);
-    invoke("resize_gold_overlay", { width: 280, height: h }).catch(() => {});
-  }, []);
+    invoke("resize_gold_overlay", { width: overlayWidth, height: h }).catch(() => {});
+  }, [overlayWidth]);
 
   useEffect(() => {
     const observer = new ResizeObserver(() => updateSize());
@@ -47,7 +60,7 @@ export function GoldOverlayApp() {
 
   useEffect(() => {
     updateSize();
-  }, [data, error, loading, updateSize]);
+  }, [data, error, loading, updateSize, layout]);
 
   function handleMouseDown(e: React.MouseEvent) {
     if (e.shiftKey) {
@@ -60,51 +73,100 @@ export function GoldOverlayApp() {
     getCurrentWindow().hide();
   }
 
+  const headerPad =
+    layout === "classic"
+      ? "px-3 py-1.5"
+      : layout === "compact"
+        ? "px-2.5 py-1"
+        : layout === "single"
+          ? "px-2 py-1"
+          : "px-2 py-0.5";
+
+  const contentPad =
+    layout === "classic"
+      ? "px-3 py-3"
+      : layout === "compact"
+        ? "px-2.5 py-2"
+        : layout === "single"
+          ? "px-2 py-1.5"
+          : "px-2 py-1";
+
+  const rowGap =
+    layout === "classic"
+      ? "gap-2.5"
+      : layout === "compact"
+        ? "gap-1.5"
+        : layout === "single"
+          ? "gap-1"
+          : "gap-0.5";
+
+  const showHint = layout === "classic" || layout === "compact";
+
   return (
     <div ref={contentRef} onMouseDown={handleMouseDown} className="select-none">
-      <div className="rounded-xl border border-accent/30 overflow-hidden"
-           style={{ background: "rgba(15, 17, 23, 0.92)" }}>
-        {/* Header */}
-        <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/50">
-          <div className="flex items-center gap-2">
-            <Coins size={14} className="text-gold" />
-            <span className="text-xs font-bold text-gold">Золото</span>
+      <div
+        className="rounded-xl border border-accent/30 overflow-hidden"
+        style={{ background: "rgba(15, 17, 23, 0.92)" }}
+      >
+        <div
+          className={`flex items-center justify-between border-b border-border/50 ${headerPad}`}
+        >
+          <div className="flex items-center gap-1.5 min-w-0">
+            <Coins
+              size={layout === "micro" ? 11 : layout === "single" ? 12 : 14}
+              className="text-gold shrink-0"
+            />
+            <span
+              className={`font-bold text-gold truncate ${
+                layout === "micro" ? "text-[10px]" : "text-xs"
+              }`}
+            >
+              Золото
+            </span>
           </div>
-          <div className="flex items-center gap-1.5">
-            <GripHorizontal size={12} className="text-text-muted" />
-            <span className="text-[10px] text-text-muted">Shift+drag</span>
+          <div className="flex items-center gap-1 shrink-0">
+            {showHint && (
+              <>
+                <GripHorizontal size={12} className="text-text-muted" />
+                <span className="text-[10px] text-text-muted whitespace-nowrap">
+                  Shift+drag
+                </span>
+              </>
+            )}
             <button
               onClick={handleClose}
-              className="ml-2 p-1 rounded hover:bg-bg-hover/50 text-text-muted hover:text-text-primary transition-colors"
+              className="p-1 rounded hover:bg-bg-hover/50 text-text-muted hover:text-text-primary transition-colors"
             >
-              <X size={12} />
+              <X size={layout === "micro" ? 11 : 12} />
             </button>
           </div>
         </div>
 
-        {/* Content */}
-        <div className="px-3 py-3">
+        <div className={contentPad}>
           {loading && !data && (
-            <div className="flex items-center gap-2 py-3 justify-center">
-              <Loader2 size={14} className="animate-spin text-gold" />
+            <div className="flex items-center gap-2 py-2 justify-center">
+              <Loader2
+                size={layout === "micro" ? 12 : 14}
+                className="animate-spin text-gold"
+              />
               <span className="text-xs text-text-muted">Загрузка...</span>
             </div>
           )}
 
           {error && !data && (
-            <p className="text-xs text-loss text-center py-3">{error}</p>
+            <p className="text-xs text-loss text-center py-2">{error}</p>
           )}
 
           {data && data.lanes.length > 0 && (
-            <div className="flex flex-col gap-2.5">
+            <div className={`flex flex-col ${rowGap}`}>
               {data.lanes.map((lane) => (
-                <GoldLaneRow key={lane.role} lane={lane} />
+                <GoldLaneRow key={lane.role} lane={lane} layout={layout} />
               ))}
             </div>
           )}
 
           {data && data.lanes.length === 0 && (
-            <p className="text-xs text-text-muted text-center py-3">
+            <p className="text-xs text-text-muted text-center py-2">
               Ожидание данных о ролях...
             </p>
           )}
