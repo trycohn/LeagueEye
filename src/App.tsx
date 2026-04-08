@@ -193,10 +193,7 @@ export default function App() {
         {view === "home" && !loading && !error && (
           <div className="relative">
             <HomeView
-              detectedAccount={detectedAccount}
               onSearch={handleSearch}
-              onBadgeClick={handleBadgeClick}
-              loading={loading}
             />
           </div>
         )}

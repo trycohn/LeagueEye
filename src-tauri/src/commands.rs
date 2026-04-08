@@ -169,6 +169,15 @@ pub async fn load_more_matches(
     api.load_more_matches(&puuid, offset, limit).await
 }
 
+// ─── get_global_dashboard ───────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_global_dashboard(
+    api: State<'_, ServerApiClient>,
+) -> Result<GlobalDashboardData, String> {
+    api.get_global_dashboard().await
+}
+
 // ─── get_live_game ───────────────────────────────────────────────────────────
 
 #[tauri::command]

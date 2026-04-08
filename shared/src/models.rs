@@ -1,5 +1,41 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalStats {
+    pub total_players: i64,
+    pub analyzed_matches: i64,
+    pub hours_played: i64,
+    pub pentakills: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BestPlayerRole {
+    pub role: String,
+    pub player: String,
+    pub tag: String,
+    pub champ: String,
+    pub winrate: String,
+    pub kda: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopWinrateChampion {
+    pub champ: String,
+    pub winrate: String,
+    pub games: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalDashboardData {
+    pub stats: GlobalStats,
+    pub best_by_role: Vec<BestPlayerRole>,
+    pub top_winrates: Vec<TopWinrateChampion>,
+}
+
 // --- Riot Account ---
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

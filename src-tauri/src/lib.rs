@@ -303,6 +303,7 @@ pub fn run() {
             commands::get_cached_profile,
             commands::get_live_game,
             commands::load_more_matches,
+            commands::get_global_dashboard,
             commands::get_match_detail,
             commands::request_coaching,
             commands::get_gold_comparison,
