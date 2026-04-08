@@ -50,12 +50,8 @@ impl ServerApiClient {
             return Err(error_msg);
         }
 
-        // #region agent log
-        let raw_body = response.text().await
-            .map_err(|e| format!("Ошибка чтения ответа: {}", e))?;
-        serde_json::from_str::<T>(&raw_body)
-            .map_err(|e| format!("Ошибка парсинга ответа: {} | URL: {} | Body: {}", e, url, &raw_body[..raw_body.len().min(500)]))
-        // #endregion
+        response.json::<T>().await
+            .map_err(|e| format!("Ошибка парсинга ответа: {}", e))
     }
 
     async fn post<T: serde::de::DeserializeOwned, B: serde::Serialize>(&self, path: &str, body: &B) -> Result<T, String> {
