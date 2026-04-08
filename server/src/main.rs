@@ -10,10 +10,20 @@ mod routes;
 
 #[derive(Debug, Clone)]
 pub struct AiCoachConfig {
+    pub provider: AiCoachProvider,
     pub api_key: String,
     pub base_url: String,
     pub model: String,
     pub max_tokens: u32,
+    // OpenRouter-only (optional attribution headers)
+    pub openrouter_http_referer: Option<String>,
+    pub openrouter_title: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiCoachProvider {
+    Anthropic,
+    OpenRouter,
 }
 
 pub struct AppState {
@@ -52,20 +62,10 @@ async fn main() {
     log::info!("Database connected and migrated");
 
     // AI Coach config (optional — server works without it)
-    let ai_coach_config = std::env::var("ANTHROPIC_AUTH_TOKEN")
-        .ok()
-        .filter(|k| !k.is_empty())
-        .map(|api_key| {
-            let base_url = std::env::var("ANTHROPIC_BASE_URL")
-                .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
-            let model = std::env::var("ANTHROPIC_MODEL")
-                .unwrap_or_else(|_| "claude-sonnet-4-20250514".to_string());
-            log::info!("AI Coach enabled (model: {})", model);
-            AiCoachConfig { api_key, base_url, model, max_tokens: 1024 }
-        });
+    let ai_coach_config = load_ai_coach_config();
 
     if ai_coach_config.is_none() {
-        log::warn!("ANTHROPIC_AUTH_TOKEN not set — AI Coach disabled");
+        log::warn!("AI Coach disabled (no provider configured)");
     }
 
     let state = Arc::new(AppState {
@@ -106,4 +106,83 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+fn load_ai_coach_config() -> Option<AiCoachConfig> {
+    let provider_env = std::env::var("AI_COACH_PROVIDER").ok()
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty());
+
+    let anthropic_key = std::env::var("ANTHROPIC_AUTH_TOKEN").ok()
+        .filter(|k| !k.trim().is_empty());
+    let openrouter_key = std::env::var("OPENROUTER_API_KEY").ok()
+        .filter(|k| !k.trim().is_empty());
+
+    let provider = match provider_env.as_deref() {
+        Some("anthropic") => Some(AiCoachProvider::Anthropic),
+        Some("openrouter") => Some(AiCoachProvider::OpenRouter),
+        Some(other) => {
+            log::warn!("Unknown AI_COACH_PROVIDER='{}' (use 'anthropic' or 'openrouter')", other);
+            None
+        }
+        None => {
+            // Backwards-compatible default: if Anthropic key is set, keep using Anthropic.
+            if anthropic_key.is_some() {
+                Some(AiCoachProvider::Anthropic)
+            } else if openrouter_key.is_some() {
+                Some(AiCoachProvider::OpenRouter)
+            } else {
+                None
+            }
+        }
+    }?;
+
+    match provider {
+        AiCoachProvider::Anthropic => {
+            let api_key = anthropic_key?;
+            let base_url = std::env::var("ANTHROPIC_BASE_URL")
+                .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
+            let model = std::env::var("ANTHROPIC_MODEL")
+                .unwrap_or_else(|_| "claude-sonnet-4-20250514".to_string());
+            let max_tokens = std::env::var("AI_COACH_MAX_TOKENS").ok()
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(1024);
+            log::info!("AI Coach enabled (provider: Anthropic, model: {})", model);
+            Some(AiCoachConfig {
+                provider,
+                api_key,
+                base_url,
+                model,
+                max_tokens,
+                openrouter_http_referer: None,
+                openrouter_title: None,
+            })
+        }
+        AiCoachProvider::OpenRouter => {
+            let api_key = openrouter_key?;
+            let base_url = std::env::var("OPENROUTER_BASE_URL")
+                .unwrap_or_else(|_| "https://openrouter.ai/api/v1".to_string());
+            let model = std::env::var("OPENROUTER_MODEL")
+                .unwrap_or_else(|_| "openai/gpt-4o-mini".to_string());
+            let max_tokens = std::env::var("AI_COACH_MAX_TOKENS").ok()
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(1024);
+            let http_referer = std::env::var("OPENROUTER_HTTP_REFERER").ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let title = std::env::var("OPENROUTER_TITLE").ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            log::info!("AI Coach enabled (provider: OpenRouter, model: {})", model);
+            Some(AiCoachConfig {
+                provider,
+                api_key,
+                base_url,
+                model,
+                max_tokens,
+                openrouter_http_referer: http_referer,
+                openrouter_title: title,
+            })
+        }
+    }
 }
