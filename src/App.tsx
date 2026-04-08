@@ -194,7 +194,6 @@ export default function App() {
           <div className="relative">
             <HomeView
               onSearch={handleSearch}
-              loading={loading}
             />
           </div>
         )}

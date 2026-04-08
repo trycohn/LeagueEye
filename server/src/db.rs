@@ -265,6 +265,119 @@ impl Db {
         }
         Ok(())
     }
+    pub async fn get_global_dashboard_data(&self) -> Result<GlobalDashboardData, sqlx::Error> {
+        // 1. Global Stats
+        let total_players: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM accounts")
+            .fetch_one(&self.pool)
+            .await?;
+
+        let analyzed_matches: i64 = sqlx::query_scalar("SELECT COUNT(DISTINCT match_id) FROM matches")
+            .fetch_one(&self.pool)
+            .await?;
+
+        let hours_played: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(game_duration) / 3600, 0) FROM matches")
+            .fetch_one(&self.pool)
+            .await?;
+
+        let pentakills: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(penta_kills), 0) FROM match_participants")
+            .fetch_one(&self.pool)
+            .await?;
+
+        let stats = GlobalStats {
+            total_players,
+            analyzed_matches,
+            hours_played,
+            pentakills,
+        };
+
+        // 2. Best Players by Role (Top, Jungle, Mid, ADC, Support)
+        let roles = vec![
+            ("Top", "TOP"),
+            ("Jungle", "JUNGLE"),
+            ("Mid", "MIDDLE"),
+            ("ADC", "BOTTOM"),
+            ("Support", "UTILITY"),
+        ];
+
+        let mut best_by_role = Vec::new();
+        for (display_role, db_role) in roles {
+            let row = sqlx::query(
+                r#"
+                SELECT 
+                    riot_id_name as player,
+                    riot_id_tagline as tag,
+                    champion_name as champ,
+                    COUNT(*) as games_played,
+                    (SUM(CASE WHEN win = true THEN 1 ELSE 0 END)::FLOAT / COUNT(*) * 100) as winrate,
+                    ((SUM(kills) + SUM(assists))::FLOAT / GREATEST(SUM(deaths), 1)) as kda
+                FROM match_participants
+                WHERE position = $1 AND riot_id_name IS NOT NULL
+                GROUP BY puuid, riot_id_name, riot_id_tagline, champion_name
+                HAVING COUNT(*) >= 3
+                ORDER BY winrate DESC, kda DESC
+                LIMIT 1
+                "#
+            )
+            .bind(db_role)
+            .fetch_optional(&self.pool)
+            .await?;
+
+            if let Some(r) = row {
+                use sqlx::Row;
+                let player: Option<String> = r.try_get("player").unwrap_or_default();
+                let tag: Option<String> = r.try_get("tag").unwrap_or_default();
+                let champ: Option<String> = r.try_get("champ").unwrap_or_default();
+                let winrate: Option<f64> = r.try_get("winrate").unwrap_or_default();
+                let kda: Option<f64> = r.try_get("kda").unwrap_or_default();
+
+                best_by_role.push(BestPlayerRole {
+                    role: display_role.to_string(),
+                    player: player.unwrap_or_default(),
+                    tag: tag.unwrap_or_default(),
+                    champ: champ.unwrap_or_default(),
+                    winrate: format!("{:.1}%", winrate.unwrap_or(0.0)),
+                    kda: format!("{:.1}", kda.unwrap_or(0.0)),
+                });
+            }
+        }
+
+        // 3. Top Winrate Champions
+        let top_winrates_rows = sqlx::query(
+            r#"
+            SELECT 
+                champion_name as champ,
+                COUNT(*) as games,
+                (SUM(CASE WHEN win = true THEN 1 ELSE 0 END)::FLOAT / COUNT(*) * 100) as winrate
+            FROM match_participants
+            WHERE champion_name IS NOT NULL
+            GROUP BY champion_id, champion_name
+            HAVING COUNT(*) >= 5
+            ORDER BY winrate DESC
+            LIMIT 5
+            "#
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let top_winrates = top_winrates_rows.into_iter().map(|r| {
+            use sqlx::Row;
+            let champ: Option<String> = r.try_get("champ").unwrap_or_default();
+            let winrate: Option<f64> = r.try_get("winrate").unwrap_or_default();
+            let games: Option<i64> = r.try_get("games").unwrap_or_default();
+
+            TopWinrateChampion {
+                champ: champ.unwrap_or_default(),
+                winrate: format!("{:.1}%", winrate.unwrap_or(0.0)),
+                games: games.unwrap_or(0),
+            }
+        }).collect();
+
+        Ok(GlobalDashboardData {
+            stats,
+            best_by_role,
+            top_winrates,
+        })
+    }
 }
 
 fn now_ms() -> i64 {

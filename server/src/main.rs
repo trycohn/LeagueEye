@@ -81,6 +81,8 @@ async fn main() {
 
     let app = Router::new()
         .route("/health", get(health))
+        // Global endpoints
+        .route("/api/global/dashboard", get(routes::global::get_global_dashboard))
         // Player endpoints
         .route("/api/players/{game_name}/{tag_line}", get(routes::players::search_player))
         .route("/api/players/{puuid}/mastery", get(routes::players::get_mastery))

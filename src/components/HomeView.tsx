@@ -1,9 +1,7 @@
 import { BarChart, Users, Activity, Swords } from "lucide-react";
-import type { DetectedAccount } from "../lib/types";
 
 interface Props {
   onSearch: (gameName: string, tagLine: string) => void;
-  loading: boolean;
 }
 
 const GLOBAL_STATS = [
@@ -29,7 +27,7 @@ const TOP_WINRATES = [
   { champ: "Shen", winrate: "52.9%", games: 1100 },
 ];
 
-export function HomeView({ onSearch, loading }: Props) {
+export function HomeView({ onSearch }: Props) {
   return (
     <div className="max-w-7xl mx-auto py-6">
       {/* Top Global Stats */}

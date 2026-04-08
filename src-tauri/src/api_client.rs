@@ -105,6 +105,12 @@ impl ServerApiClient {
         self.get(&format!("/api/matches/{}", match_id)).await
     }
 
+    // --- Global endpoints ---
+
+    pub async fn get_global_dashboard(&self) -> Result<GlobalDashboardData, String> {
+        self.get("/api/global/dashboard").await
+    }
+
     // --- Live game enrichment ---
 
     pub async fn enrich_live_game(&self, request: &EnrichLiveRequest) -> Result<LiveGameData, String> {
