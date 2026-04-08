@@ -102,7 +102,7 @@ async fn hide_gold_overlay(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 async fn resize_gold_overlay(app: tauri::AppHandle, width: f64, height: f64) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("gold-overlay") {
-        let w = width.max(280.0).min(500.0);
+        let w = width.max(196.0).min(400.0);
         let h = height.max(80.0).min(600.0);
         win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(w, h)))
             .map_err(|e| e.to_string())?;

@@ -1,5 +1,6 @@
 import type { LaneGoldComparison } from "../lib/types";
 import { championIconUrl } from "../lib/ddragon";
+import { RoleIcon } from "./RoleIcon";
 
 function formatGold(gold: number): string {
   const abs = Math.abs(gold);
@@ -14,39 +15,36 @@ export function GoldLaneRow({ lane }: { lane: LaneGoldComparison }) {
   const diffColor = diff > 0 ? "text-win" : diff < 0 ? "text-loss" : "text-text-muted";
   const diffText = diff > 0 ? `+${formatGold(diff)}` : diff < 0 ? formatGold(diff) : "—";
 
-  return (
-    <div className="flex items-center gap-2">
-      {/* Ally icon */}
-      <img
-        src={championIconUrl(lane.allyChampionName)}
-        alt={lane.allyChampionName}
-        className="w-8 h-8 rounded shrink-0"
-        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-      />
+  const champImg = (name: string) => (
+    <img
+      src={championIconUrl(name)}
+      alt={name}
+      className="w-6 h-6 rounded shrink-0"
+      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+    />
+  );
 
-      {/* Bar + diff */}
-      <div className="flex-1 min-w-0">
-        <p className={`text-[10px] font-bold text-center ${diffColor} leading-tight`}>
+  return (
+    <div className="flex items-center justify-between">
+      <div className="flex items-center gap-1.5 shrink-0">
+        <RoleIcon role={lane.role} size={12} />
+        {champImg(lane.allyChampionName)}
+      </div>
+      <div className="flex flex-col items-stretch shrink-0 mx-1.5" style={{ width: 72 }}>
+        <p className={`text-[9px] font-bold text-center leading-tight tabular-nums ${diffColor}`}>
           {diffText}
         </p>
-        <div className="h-2.5 rounded-full overflow-hidden flex" style={{ background: "rgba(239,68,68,0.3)" }}>
+        <div className="h-1.5 rounded-full overflow-hidden flex" style={{ background: "rgba(239,68,68,0.25)" }}>
           <div
             className="h-full rounded-l-full transition-all duration-700"
             style={{
               width: `${allyPct}%`,
-              background: diff >= 0 ? "rgba(34,197,94,0.7)" : "rgba(34,197,94,0.4)",
+              background: diff >= 0 ? "rgba(34,197,94,0.65)" : "rgba(34,197,94,0.35)",
             }}
           />
         </div>
       </div>
-
-      {/* Enemy icon */}
-      <img
-        src={championIconUrl(lane.enemyChampionName)}
-        alt={lane.enemyChampionName}
-        className="w-8 h-8 rounded shrink-0"
-        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-      />
+      {champImg(lane.enemyChampionName)}
     </div>
   );
 }
