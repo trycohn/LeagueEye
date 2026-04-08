@@ -1,5 +1,5 @@
 import { BarChart, Users, Activity, Swords } from "lucide-react";
-import type { DetectedAccount } from "../../lib/types";
+import type { DetectedAccount } from "../lib/types";
 
 interface Props {
   detectedAccount: DetectedAccount | null;
@@ -31,7 +31,7 @@ const TOP_WINRATES = [
   { champ: "Shen", winrate: "52.9%", games: 1100 },
 ];
 
-export function HomeVariant8({ detectedAccount, onSearch, onBadgeClick }: Props) {
+export function HomeView({ detectedAccount, onSearch, onBadgeClick }: Props) {
   return (
     <div className="max-w-7xl mx-auto py-6">
       {detectedAccount && (

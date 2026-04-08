@@ -9,16 +9,8 @@ import { AccountBadge } from "./components/AccountBadge";
 import { LiveGameView } from "./components/LiveGameView";
 import { useRiotApi } from "./hooks/useRiotApi";
 import { useLiveGame } from "./hooks/useLiveGame";
-import { HomeVariant1 } from "./components/home-variants/HomeVariant1";
-import { HomeVariant2 } from "./components/home-variants/HomeVariant2";
-import { HomeVariant3 } from "./components/home-variants/HomeVariant3";
-import { HomeVariant4 } from "./components/home-variants/HomeVariant4";
-import { HomeVariant5 } from "./components/home-variants/HomeVariant5";
-import { HomeVariant6 } from "./components/home-variants/HomeVariant6";
-import { HomeVariant7 } from "./components/home-variants/HomeVariant7";
-import { HomeVariant8 } from "./components/home-variants/HomeVariant8";
-import { HomeVariant9 } from "./components/home-variants/HomeVariant9";
-import { Eye, AlertCircle, Loader2, ChevronLeft, LayoutTemplate } from "lucide-react";
+import { HomeView } from "./components/HomeView";
+import { Eye, AlertCircle, Loader2, ChevronLeft } from "lucide-react";
 import type { DetectedAccount } from "./lib/types";
 
 type View = "home" | "profile" | "live";
@@ -44,7 +36,6 @@ export default function App() {
   } = useRiotApi();
 
   const [view, setView] = useState<View>("home");
-  const [homeVariant, setHomeVariant] = useState<1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9>(7);
   const [prevView, setPrevView] = useState<View>("home");
   const [detectedAccount, setDetectedAccount] =
     useState<DetectedAccount | null>(null);
@@ -201,100 +192,12 @@ export default function App() {
         {/* HOME VIEW */}
         {view === "home" && !loading && !error && (
           <div className="relative">
-            {homeVariant === 1 && (
-              <HomeVariant1
-                detectedAccount={detectedAccount}
-                onSearch={handleSearch}
-                onBadgeClick={handleBadgeClick}
-                loading={loading}
-              />
-            )}
-            {homeVariant === 2 && (
-              <HomeVariant2
-                detectedAccount={detectedAccount}
-                onSearch={handleSearch}
-                onBadgeClick={handleBadgeClick}
-                loading={loading}
-              />
-            )}
-            {homeVariant === 3 && (
-              <HomeVariant3
-                detectedAccount={detectedAccount}
-                onSearch={handleSearch}
-                onBadgeClick={handleBadgeClick}
-                loading={loading}
-              />
-            )}
-            {homeVariant === 4 && (
-              <HomeVariant4
-                detectedAccount={detectedAccount}
-                onSearch={handleSearch}
-                onBadgeClick={handleBadgeClick}
-                loading={loading}
-              />
-            )}
-            {homeVariant === 5 && (
-              <HomeVariant5
-                detectedAccount={detectedAccount}
-                onSearch={handleSearch}
-                onBadgeClick={handleBadgeClick}
-                loading={loading}
-              />
-            )}
-            {homeVariant === 6 && (
-              <HomeVariant6
-                detectedAccount={detectedAccount}
-                onSearch={handleSearch}
-                onBadgeClick={handleBadgeClick}
-                loading={loading}
-              />
-            )}
-
-            {homeVariant === 7 && (
-              <HomeVariant7
-                detectedAccount={detectedAccount}
-                onSearch={handleSearch}
-                onBadgeClick={handleBadgeClick}
-                loading={loading}
-              />
-            )}
-            {homeVariant === 8 && (
-              <HomeVariant8
-                detectedAccount={detectedAccount}
-                onSearch={handleSearch}
-                onBadgeClick={handleBadgeClick}
-                loading={loading}
-              />
-            )}
-            {homeVariant === 9 && (
-              <HomeVariant9
-                detectedAccount={detectedAccount}
-                onSearch={handleSearch}
-                onBadgeClick={handleBadgeClick}
-                loading={loading}
-              />
-            )}
-
-            {/* Variant Switcher (for demo purposes) */}
-            <div className="fixed bottom-6 right-6 flex items-center gap-2 bg-bg-card/80 backdrop-blur-md border border-border p-2 rounded-2xl shadow-2xl z-50">
-              <LayoutTemplate className="text-text-muted w-5 h-5 ml-2" />
-              <div className="w-px h-6 bg-border mx-2" />
-              <div className="grid grid-cols-3 gap-1">
-                {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((v) => (
-                  <button
-                    key={v}
-                    onClick={() => setHomeVariant(v as 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9)}
-                    className={`w-8 h-8 rounded-xl flex items-center justify-center text-sm font-bold transition-all ${
-                      homeVariant === v
-                        ? "bg-accent text-white shadow-lg shadow-accent/20"
-                        : "text-text-muted hover:bg-bg-hover hover:text-text-primary"
-                    }`}
-                  >
-                    {v}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <HomeView
+              detectedAccount={detectedAccount}
+              onSearch={handleSearch}
+              onBadgeClick={handleBadgeClick}
+              loading={loading}
+            />
           </div>
         )}
 
