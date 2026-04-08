@@ -5,9 +5,10 @@ use axum::{
 };
 use futures::stream::Stream;
 use leagueeye_shared::models::{CoachPlayerInfo, CoachingContext, CoachStreamPayload};
+use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::AppState;
+use crate::{AiCoachProvider, AppState};
 
 // ─── System prompt ──────────────────────────────────────────────────────────
 
@@ -164,7 +165,33 @@ pub async fn stream_coach(
     let system_prompt = build_system_prompt(&ctx.phase);
     let user_message = build_user_message(&ctx);
 
-    Sse::new(make_anthropic_stream(config, system_prompt, user_message))
+    Sse::new(make_ai_stream(config, system_prompt, user_message))
+}
+
+type CoachStream = Pin<Box<dyn Stream<Item = Result<Event, std::convert::Infallible>> + Send>>;
+
+fn make_ai_stream(
+    config: Option<crate::AiCoachConfig>,
+    system_prompt: String,
+    user_message: String,
+) -> CoachStream {
+    let provider = config.as_ref().map(|c| c.provider);
+    match provider {
+        Some(AiCoachProvider::Anthropic) => Box::pin(make_anthropic_stream(config, system_prompt, user_message)),
+        Some(AiCoachProvider::OpenRouter) => Box::pin(make_openrouter_stream(config, system_prompt, user_message)),
+        None => Box::pin(make_no_config_stream()),
+    }
+}
+
+fn make_no_config_stream() -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
+    async_stream::stream! {
+        yield Ok(Event::default().data(
+            serde_json::to_string(&CoachStreamPayload {
+                kind: "error".to_string(),
+                text: Some("AI Coach не настроен на сервере (не задан AI_COACH_PROVIDER и нет ключей провайдера)".to_string()),
+            }).unwrap()
+        ));
+    }
 }
 
 fn make_anthropic_stream(
@@ -179,7 +206,7 @@ fn make_anthropic_stream(
                 yield Ok(Event::default().data(
                     serde_json::to_string(&CoachStreamPayload {
                         kind: "error".to_string(),
-                        text: Some("AI Coach не настроен на сервере (ANTHROPIC_AUTH_TOKEN не задан)".to_string()),
+                        text: Some("AI Coach не настроен на сервере (ключ провайдера не задан)".to_string()),
                     }).unwrap()
                 ));
                 return;
@@ -282,6 +309,165 @@ fn make_anthropic_stream(
                                     .and_then(|e| e.get("message"))
                                     .and_then(|m| m.as_str())
                                     .unwrap_or("Unknown AI error");
+                                yield Ok(Event::default().data(
+                                    serde_json::to_string(&CoachStreamPayload {
+                                        kind: "error".to_string(),
+                                        text: Some(err_msg.to_string()),
+                                    }).unwrap()
+                                ));
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Emit end
+        yield Ok(Event::default().data(
+            serde_json::to_string(&CoachStreamPayload {
+                kind: "end".to_string(),
+                text: None,
+            }).unwrap()
+        ));
+    }
+}
+
+fn make_openrouter_stream(
+    config: Option<crate::AiCoachConfig>,
+    system_prompt: String,
+    user_message: String,
+) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
+    async_stream::stream! {
+        let config = match config {
+            Some(c) => c,
+            None => {
+                yield Ok(Event::default().data(
+                    serde_json::to_string(&CoachStreamPayload {
+                        kind: "error".to_string(),
+                        text: Some("AI Coach не настроен на сервере (ключ провайдера не задан)".to_string()),
+                    }).unwrap()
+                ));
+                return;
+            }
+        };
+
+        // Emit start
+        yield Ok(Event::default().data(
+            serde_json::to_string(&CoachStreamPayload {
+                kind: "start".to_string(),
+                text: None,
+            }).unwrap()
+        ));
+
+        let client = reqwest::Client::new();
+
+        // OpenRouter uses OpenAI-compatible Chat Completions API.
+        // Docs: https://openrouter.ai/docs/api/reference/overview
+        let body = serde_json::json!({
+            "model": config.model,
+            "stream": true,
+            "max_tokens": config.max_tokens,
+            "messages": [
+                { "role": "system", "content": system_prompt },
+                { "role": "user", "content": user_message }
+            ]
+        });
+
+        let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
+
+        let mut req = client
+            .post(&url)
+            .header("authorization", format!("Bearer {}", config.api_key))
+            .header("content-type", "application/json")
+            .json(&body);
+
+        if let Some(r) = &config.openrouter_http_referer {
+            req = req.header("http-referer", r);
+        }
+        if let Some(t) = &config.openrouter_title {
+            req = req.header("x-openrouter-title", t);
+        }
+
+        let response = req.send().await;
+
+        let mut response = match response {
+            Ok(r) => r,
+            Err(e) => {
+                yield Ok(Event::default().data(
+                    serde_json::to_string(&CoachStreamPayload {
+                        kind: "error".to_string(),
+                        text: Some(format!("Ошибка соединения с AI: {}", e)),
+                    }).unwrap()
+                ));
+                return;
+            }
+        };
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body_text = response.text().await.unwrap_or_default();
+            let msg = if status.as_u16() == 401 {
+                "Неверный API ключ OpenRouter на сервере".to_string()
+            } else {
+                format!("AI API ошибка ({}): {}", status, body_text)
+            };
+            yield Ok(Event::default().data(
+                serde_json::to_string(&CoachStreamPayload {
+                    kind: "error".to_string(),
+                    text: Some(msg),
+                }).unwrap()
+            ));
+            return;
+        }
+
+        // Read SSE stream from OpenRouter and forward deltas (OpenAI style).
+        // - Data lines: "data: {json}"
+        // - End: "data: [DONE]"
+        // - Comments: ": OPENROUTER PROCESSING" (ignore)
+        let mut buffer = String::new();
+
+        while let Some(chunk) = response.chunk().await.ok().flatten() {
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(pos) = buffer.find("\n\n") {
+                let event_block = buffer[..pos].to_string();
+                buffer = buffer[pos + 2..].to_string();
+
+                for line in event_block.lines() {
+                    let line = line.trim_end();
+                    if line.starts_with(':') {
+                        continue;
+                    }
+                    if let Some(data) = line.strip_prefix("data: ") {
+                        if data == "[DONE]" {
+                            continue;
+                        }
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                            // Typical shape:
+                            // { "choices":[ { "delta": { "content": "..." }, "finish_reason": null } ], ... }
+                            let content = parsed
+                                .get("choices")
+                                .and_then(|c| c.get(0))
+                                .and_then(|c0| c0.get("delta"))
+                                .and_then(|d| d.get("content"))
+                                .and_then(|t| t.as_str());
+                            if let Some(text) = content {
+                                if !text.is_empty() {
+                                    yield Ok(Event::default().data(
+                                        serde_json::to_string(&CoachStreamPayload {
+                                            kind: "delta".to_string(),
+                                            text: Some(text.to_string()),
+                                        }).unwrap()
+                                    ));
+                                }
+                            }
+
+                            // Some providers may stream errors as JSON.
+                            if let Some(err_msg) = parsed.get("error")
+                                .and_then(|e| e.get("message"))
+                                .and_then(|m| m.as_str())
+                            {
                                 yield Ok(Event::default().data(
                                     serde_json::to_string(&CoachStreamPayload {
                                         kind: "error".to_string(),
