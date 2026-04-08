@@ -9,8 +9,14 @@ import {
   parseGoldOverlayLayout,
   type GoldOverlayLayout,
 } from "../lib/goldOverlayLayout";
+import { GOLD_OVERLAY_MOCK_DATA } from "../lib/goldOverlayMockData";
 
 const POLL_INTERVAL = 10_000;
+
+function isGoldOverlayBrowserMock(): boolean {
+  if (!import.meta.env.DEV) return false;
+  return new URLSearchParams(window.location.search).has("mock");
+}
 
 function useGoldOverlayLayout(): GoldOverlayLayout {
   return useMemo(
@@ -27,6 +33,12 @@ export function GoldOverlayApp() {
   const contentRef = useRef<HTMLDivElement>(null);
 
   const fetchData = useCallback(async () => {
+    if (isGoldOverlayBrowserMock()) {
+      setData(GOLD_OVERLAY_MOCK_DATA);
+      setError(null);
+      setLoading(false);
+      return;
+    }
     try {
       const result = await invoke<GoldComparisonData>("get_gold_comparison");
       setData(result);
@@ -40,6 +52,7 @@ export function GoldOverlayApp() {
 
   useEffect(() => {
     fetchData();
+    if (isGoldOverlayBrowserMock()) return;
     const timer = setInterval(fetchData, POLL_INTERVAL);
     return () => clearInterval(timer);
   }, [fetchData]);
@@ -49,6 +62,7 @@ export function GoldOverlayApp() {
   const updateSize = useCallback(() => {
     if (!contentRef.current) return;
     const h = Math.ceil(contentRef.current.getBoundingClientRect().height);
+    if (isGoldOverlayBrowserMock()) return;
     invoke("resize_gold_overlay", { width: overlayWidth, height: h }).catch(() => {});
   }, [overlayWidth]);
 
@@ -63,13 +77,13 @@ export function GoldOverlayApp() {
   }, [data, error, loading, updateSize, layout]);
 
   function handleMouseDown(e: React.MouseEvent) {
-    if (e.shiftKey) {
-      e.preventDefault();
-      getCurrentWindow().startDragging();
-    }
+    if (!e.shiftKey || isGoldOverlayBrowserMock()) return;
+    e.preventDefault();
+    getCurrentWindow().startDragging();
   }
 
   function handleClose() {
+    if (isGoldOverlayBrowserMock()) return;
     getCurrentWindow().hide();
   }
 
