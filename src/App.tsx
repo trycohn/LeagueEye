@@ -9,6 +9,7 @@ import { AccountBadge } from "./components/AccountBadge";
 import { LiveGameView } from "./components/LiveGameView";
 import { useRiotApi } from "./hooks/useRiotApi";
 import { useLiveGame } from "./hooks/useLiveGame";
+import { HomeView } from "./components/HomeView";
 import { Eye, AlertCircle, Loader2, ChevronLeft } from "lucide-react";
 import type { DetectedAccount } from "./lib/types";
 
@@ -190,18 +191,13 @@ export default function App() {
 
         {/* HOME VIEW */}
         {view === "home" && !loading && !error && (
-          <div className="flex flex-col items-center justify-center py-24 gap-4">
-            <Eye size={48} className="text-text-muted opacity-30" />
-            <p className="text-text-muted text-lg">Введите Riot ID для поиска</p>
-            <p className="text-text-muted text-sm">Например: Player#RU1</p>
-            {detectedAccount && (
-              <button
-                onClick={handleBadgeClick}
-                className="mt-4 px-5 py-2.5 rounded-lg bg-accent text-white font-medium hover:bg-accent/90 transition-colors"
-              >
-                Открыть мой профиль
-              </button>
-            )}
+          <div className="relative">
+            <HomeView
+              detectedAccount={detectedAccount}
+              onSearch={handleSearch}
+              onBadgeClick={handleBadgeClick}
+              loading={loading}
+            />
           </div>
         )}
 
