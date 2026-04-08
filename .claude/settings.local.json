@@ -26,7 +26,8 @@
       "Read(//home/tryconn/.cargo/**)",
       "Read(//usr/local/cargo/**)",
       "Bash(grep -A5 \"^name = \\\\\"tauri\\\\\"$\" /mnt/c/Users/1337/Documents/LeagueEye/src-tauri/Cargo.lock)",
-      "Bash(grep -n \"tray\" /mnt/c/Users/1337/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-utils-2*/config/)"
+      "Bash(grep -n \"tray\" /mnt/c/Users/1337/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-utils-2*/config/)",
+      "mcp__linear-server__get_issue"
     ]
   }
 }

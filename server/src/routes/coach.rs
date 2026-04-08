@@ -7,6 +7,7 @@ use futures::stream::Stream;
 use leagueeye_shared::models::{CoachPlayerInfo, CoachingContext, CoachStreamPayload};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::{AiCoachProvider, AppState};
 
@@ -226,7 +227,11 @@ fn make_anthropic_stream(
             }).unwrap()
         ));
 
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(90))
+            .build()
+            .unwrap_or_default();
         let body = serde_json::json!({
             "model": config.model,
             "max_tokens": config.max_tokens,
@@ -239,6 +244,8 @@ fn make_anthropic_stream(
         });
 
         let url = format!("{}/v1/messages", config.base_url.trim_end_matches('/'));
+        let send_start = Instant::now();
+        log::info!("[coach] Отправляю запрос к {} (model: {})", url, config.model);
 
         let response = client
             .post(&url)
@@ -248,6 +255,8 @@ fn make_anthropic_stream(
             .json(&body)
             .send()
             .await;
+
+        log::info!("[coach] Ответ от AI получен через {:.2}s", send_start.elapsed().as_secs_f32());
 
         let mut response = match response {
             Ok(r) => r,
@@ -281,8 +290,17 @@ fn make_anthropic_stream(
 
         // Read SSE stream from Anthropic line-by-line (same approach as OpenRouter).
         let mut buffer = String::new();
+        let mut last_chunk_time = Instant::now();
+        let mut first_token_sent = false;
+        let first_token_start = Instant::now();
 
         while let Some(chunk) = response.chunk().await.ok().flatten() {
+            let chunk_received = Instant::now();
+            if chunk_received.duration_since(last_chunk_time).as_secs() > 2 {
+                log::warn!("[coach] Пауза между чанками {:.1}s (Anthropic)",
+                    chunk_received.duration_since(last_chunk_time).as_secs_f32());
+            }
+            last_chunk_time = chunk_received;
             buffer.push_str(&String::from_utf8_lossy(&chunk));
 
             while let Some(pos) = buffer.find('\n') {
@@ -304,6 +322,11 @@ fn make_anthropic_stream(
                                 .and_then(|d| d.get("text"))
                                 .and_then(|t| t.as_str())
                             {
+                                if !first_token_sent {
+                                    first_token_sent = true;
+                                    log::info!("[coach] Первый токен через {:.2}s от начала ответа",
+                                        first_token_start.elapsed().as_secs_f32());
+                                }
                                 yield Ok(Event::default().data(
                                     serde_json::to_string(&CoachStreamPayload {
                                         kind: "delta".to_string(),
@@ -367,7 +390,11 @@ fn make_openrouter_stream(
             }).unwrap()
         ));
 
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(90))
+            .build()
+            .unwrap_or_default();
 
         let body = serde_json::json!({
             "model": config.model,
@@ -380,6 +407,8 @@ fn make_openrouter_stream(
         });
 
         let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
+        let send_start = Instant::now();
+        log::info!("[coach] Отправляю запрос к OpenRouter (model: {})", config.model);
 
         let mut req = client
             .post(&url)
@@ -395,6 +424,8 @@ fn make_openrouter_stream(
         }
 
         let response = req.send().await;
+
+        log::info!("[coach] Ответ от OpenRouter получен через {:.2}s", send_start.elapsed().as_secs_f32());
 
         let mut response = match response {
             Ok(r) => r,
