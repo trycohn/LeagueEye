@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { SearchBar } from "./components/SearchBar";
 import { ProfileCard } from "./components/ProfileCard";
 import { MasteryList } from "./components/MasteryList";
@@ -15,6 +16,7 @@ import type { DetectedAccount } from "./lib/types";
 import { AiTestDialog } from "./components/AiTestDialog"; // TEST: удалить после тестирования
 
 type View = "home" | "profile" | "live";
+type LeagueWindowVisibilityPayload = { visible: boolean };
 
 const POLL_INTERVAL_MS = 8_000;
 
@@ -41,53 +43,91 @@ export default function App() {
   const [detectedAccount, setDetectedAccount] =
     useState<DetectedAccount | null>(null);
   const [clientOnline, setClientOnline] = useState(false);
+  const [leagueWindowVisible, setLeagueWindowVisible] = useState(false);
+  const [liveOverlayAllowed, setLiveOverlayAllowed] = useState(false);
   const [showAiTest, setShowAiTest] = useState(false); // TEST: удалить после тестирования
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { liveData, phase } = useLiveGame(clientOnline);
+  const isLive = phase === "champ_select" || phase === "in_game";
 
-  // Автопереключение на live view + автопоказ оверлея
+  // Автопереключение на live view + отдельная политика видимости оверлея.
   const overlayShownRef = useRef(false);
   const leaveLiveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
-    if (phase === "champ_select" || phase === "in_game") {
+    if (isLive) {
       // Cancel any pending "leave live" timer — we're back in game
       if (leaveLiveTimerRef.current) {
         clearTimeout(leaveLiveTimerRef.current);
         leaveLiveTimerRef.current = null;
       }
+      setLiveOverlayAllowed(true);
       if (view !== "live") {
         setPrevView(view);
         setView("live");
-      }
-      if (!overlayShownRef.current) {
-        overlayShownRef.current = true;
-        invoke("show_overlay").catch(() => {});
-        invoke("show_gold_overlay").catch(() => {});
       }
     } else if (view === "live" && !leaveLiveTimerRef.current) {
       // Debounce leaving live view to avoid flickering during phase transitions
       leaveLiveTimerRef.current = setTimeout(() => {
         leaveLiveTimerRef.current = null;
         setView(prevView);
-        overlayShownRef.current = false;
-        invoke("hide_overlay").catch(() => {});
-        invoke("hide_gold_overlay").catch(() => {});
+        setLiveOverlayAllowed(false);
       }, 1500);
+    } else {
+      setLiveOverlayAllowed(false);
     }
-    return () => {
-      if (leaveLiveTimerRef.current) {
-        clearTimeout(leaveLiveTimerRef.current);
-        leaveLiveTimerRef.current = null;
-      }
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
   useEffect(() => {
+    const shouldShowOverlay = liveOverlayAllowed && leagueWindowVisible;
+    if (shouldShowOverlay && !overlayShownRef.current) {
+      overlayShownRef.current = true;
+      invoke("show_overlay").catch(() => {});
+      invoke("show_gold_overlay").catch(() => {});
+      return;
+    }
+
+    if (!shouldShowOverlay) {
+      overlayShownRef.current = false;
+      invoke("hide_overlay").catch(() => {});
+      invoke("hide_gold_overlay").catch(() => {});
+    }
+  }, [leagueWindowVisible, liveOverlayAllowed]);
+
+  useEffect(() => {
+    let mounted = true;
+
     tryDetect();
+    invoke<boolean>("get_league_window_visibility")
+      .then((visible) => {
+        if (mounted) setLeagueWindowVisible(visible);
+      })
+      .catch(() => {});
+
+    const unlisten = listen<LeagueWindowVisibilityPayload>(
+      "league-window-visibility",
+      (event) => {
+        if (mounted) {
+          setLeagueWindowVisible(Boolean(event.payload?.visible));
+        }
+      }
+    );
+
+    return () => {
+      mounted = false;
+      unlisten.then((dispose) => dispose()).catch(() => {});
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (view === "live" || !leaveLiveTimerRef.current) return;
+    clearTimeout(leaveLiveTimerRef.current);
+    leaveLiveTimerRef.current = null;
+    setLiveOverlayAllowed(false);
+  }, [view]);
 
   useEffect(() => {
     pollRef.current = setInterval(async () => {
@@ -106,6 +146,15 @@ export default function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detectedAccount]);
+
+  useEffect(() => {
+    return () => {
+      if (leaveLiveTimerRef.current) {
+        clearTimeout(leaveLiveTimerRef.current);
+        leaveLiveTimerRef.current = null;
+      }
+    };
+  }, []);
 
   async function tryDetect() {
     try {
@@ -136,8 +185,6 @@ export default function App() {
   function goHome() {
     setView("home");
   }
-
-  const isLive = phase === "champ_select" || phase === "in_game";
 
   return (
     <div className="min-h-screen bg-bg-primary">

@@ -2,6 +2,7 @@ mod ai_coach;
 mod api_client;
 mod commands;
 mod db;
+mod league_window;
 mod lcu;
 mod models;
 
@@ -21,13 +22,13 @@ pub type SharedDb = Arc<Mutex<Db>>;
 fn create_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("overlay") {
         let _ = win.show();
-        let _ = win.set_focus();
         return Ok(());
     }
 
     let _win = WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App("overlay.html".into()))
         .title("LeagueEye Coach")
         .inner_size(420.0, 200.0)
+        .focused(false)
         .always_on_top(true)
         .transparent(true)
         .decorations(false)
@@ -43,13 +44,13 @@ fn create_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
 fn create_gold_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("gold-overlay") {
         let _ = win.show();
-        let _ = win.set_focus();
         return Ok(());
     }
 
     let _win = WebviewWindowBuilder::new(app, "gold-overlay", WebviewUrl::App("gold-overlay.html".into()))
         .title("LeagueEye Gold")
         .inner_size(280.0, 300.0)
+        .focused(false)
         .always_on_top(true)
         .transparent(true)
         .decorations(false)
@@ -64,7 +65,17 @@ fn create_gold_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 async fn show_overlay(app: tauri::AppHandle) -> Result<(), String> {
+    if !league_window::current_visibility() {
+        hide_overlay(app).await?;
+        return Ok(());
+    }
+
     create_overlay_window(&app)
+}
+
+#[tauri::command]
+async fn get_league_window_visibility() -> Result<bool, String> {
+    Ok(league_window::current_visibility())
 }
 
 #[tauri::command]
@@ -88,6 +99,11 @@ async fn resize_overlay(app: tauri::AppHandle, width: f64, height: f64) -> Resul
 
 #[tauri::command]
 async fn show_gold_overlay(app: tauri::AppHandle) -> Result<(), String> {
+    if !league_window::current_visibility() {
+        hide_gold_overlay(app).await?;
+        return Ok(());
+    }
+
     create_gold_overlay_window(&app)
 }
 
@@ -161,6 +177,10 @@ mod keyboard_hook {
                 };
                 if shift_held {
                     if let Some(app) = APP_HANDLE.get() {
+                        if !super::league_window::current_visibility() {
+                            log::info!("[hook] Shift+E ignored because League window is not active");
+                            return unsafe { CallNextHookEx(0, code, wparam, lparam) };
+                        }
                         log::info!("[hook] Shift+E detected via low-level hook");
                         let _ = super::create_overlay_window(app);
                         let _ = super::create_gold_overlay_window(app);
@@ -254,6 +274,7 @@ pub fn run() {
             let db = Db::open(db_path).expect("Failed to open SQLite database");
             app.manage(Arc::new(Mutex::new(db)) as SharedDb);
 
+            league_window::start_monitor(app.handle().clone());
             keyboard_hook::install(app.handle().clone());
 
             // ── System tray ──
@@ -288,6 +309,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             show_overlay,
+            get_league_window_visibility,
             hide_overlay,
             resize_overlay,
             show_gold_overlay,

@@ -111,6 +111,52 @@ pub fn detect_lcu_credentials() -> Option<LcuCredentials> {
     None
 }
 
+pub fn find_league_install_dir() -> Option<PathBuf> {
+    for path in &lockfile_candidates_from_known_paths() {
+        if path.exists() {
+            if let Some(parent) = path.parent() {
+                return Some(parent.to_path_buf());
+            }
+        }
+    }
+
+    find_league_dir_from_process()
+}
+
+pub fn is_game_fullscreen_mode() -> bool {
+    let Some(install_dir) = find_league_install_dir() else {
+        return false;
+    };
+
+    let game_cfg = install_dir.join("Config").join("game.cfg");
+    let Ok(contents) = std::fs::read_to_string(game_cfg) else {
+        return false;
+    };
+
+    let mut in_general_section = false;
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
+            continue;
+        }
+
+        if line.starts_with('[') && line.ends_with(']') {
+            in_general_section = line.eq_ignore_ascii_case("[General]");
+            continue;
+        }
+
+        if !in_general_section {
+            continue;
+        }
+
+        if let Some(value) = line.strip_prefix("WindowMode=") {
+            return value.trim() == "0";
+        }
+    }
+
+    false
+}
+
 fn lockfile_candidates_from_known_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
     for drive in &["C", "D", "E", "F"] {
