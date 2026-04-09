@@ -56,6 +56,20 @@ pub fn build_context_from_allgamedata(
     let my_champ = me.and_then(|p| p.champion_name.clone()).unwrap_or_default();
     let my_pos = me.and_then(|p| p.position.clone()).unwrap_or_default();
 
+    // Log raw LCU data for debugging
+    if let Some(me_player) = me {
+        let scores_info = me_player.scores.as_ref()
+            .map(|s| format!("K:{} D:{} A:{} CS:{:?} Lv:{}",
+                s.kills.unwrap_or(-1), s.deaths.unwrap_or(-1),
+                s.assists.unwrap_or(-1), s.creep_score, me_player.level))
+            .unwrap_or_else(|| "scores=null".to_string());
+        let active_cs = alldata.active_player.as_ref()
+            .and_then(|a| a.level)
+            .map(|l| format!("active_player.level={}", l))
+            .unwrap_or_else(|| "active_player=null".to_string());
+        log::info!("[coach] LCU raw data for '{}': scores=[{}] | {}", my_name, scores_info, active_cs);
+    }
+
     // Get my champion meta
     let my_meta = champion_meta.get(&my_champ);
     let my_resource = my_meta.map(|m| m.resource.clone());
