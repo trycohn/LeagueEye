@@ -80,12 +80,18 @@ export function useAiCoach() {
 
   const requestAdvice = useCallback(async () => {
     if (persistedIsStreaming) return;
+
+    persistedIsStreaming = true;
     persistedError = null;
+    persistedStream = "";
     forceUpdate((n: number) => n + 1);
+
     try {
       await invoke("request_coaching");
     } catch (e) {
+      persistedIsStreaming = false;
       persistedError = typeof e === "string" ? e : String(e);
+      persistedStream = "";
       forceUpdate((n: number) => n + 1);
     }
   }, []);

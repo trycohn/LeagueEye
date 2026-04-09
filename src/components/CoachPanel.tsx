@@ -96,7 +96,7 @@ export function CoachPanel() {
           )}
 
           {/* Latest message */}
-          {!isStreaming && latestMessage && (
+          {!isStreaming && latestMessage && !error && (
             <div className="p-3 rounded-lg bg-bg-primary/50 border border-border">
               <CoachText text={latestMessage.text} />
               <p className="text-xs text-text-muted mt-2">

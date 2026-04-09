@@ -92,7 +92,7 @@ export function OverlayApp() {
             </div>
           )}
 
-          {!isStreaming && latestMessage && (
+          {!isStreaming && latestMessage && !error && (
             <CoachText text={latestMessage.text} />
           )}
 
