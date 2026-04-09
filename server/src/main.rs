@@ -24,6 +24,7 @@ pub struct AiCoachConfig {
 pub enum AiCoachProvider {
     Anthropic,
     OpenRouter,
+    DeepSeek,
 }
 
 pub struct AppState {
@@ -135,12 +136,18 @@ fn load_ai_coach_config() -> Option<AiCoachConfig> {
         .filter(|k| !k.trim().is_empty());
     let openrouter_key = std::env::var("OPENROUTER_API_KEY").ok()
         .filter(|k| !k.trim().is_empty());
+    let deepseek_key = std::env::var("DEEPSEEK_API_KEY").ok()
+        .filter(|k| !k.trim().is_empty());
 
     let provider = match provider_env.as_deref() {
         Some("anthropic") => Some(AiCoachProvider::Anthropic),
         Some("openrouter") => Some(AiCoachProvider::OpenRouter),
+        Some("deepseek") => Some(AiCoachProvider::DeepSeek),
         Some(other) => {
-            log::warn!("Unknown AI_COACH_PROVIDER='{}' (use 'anthropic' or 'openrouter')", other);
+            log::warn!(
+                "Unknown AI_COACH_PROVIDER='{}' (use 'anthropic', 'openrouter' or 'deepseek')",
+                other
+            );
             None
         }
         None => {
@@ -149,6 +156,8 @@ fn load_ai_coach_config() -> Option<AiCoachConfig> {
                 Some(AiCoachProvider::Anthropic)
             } else if openrouter_key.is_some() {
                 Some(AiCoachProvider::OpenRouter)
+            } else if deepseek_key.is_some() {
+                Some(AiCoachProvider::DeepSeek)
             } else {
                 None
             }
@@ -200,6 +209,26 @@ fn load_ai_coach_config() -> Option<AiCoachConfig> {
                 max_tokens,
                 openrouter_http_referer: http_referer,
                 openrouter_title: title,
+            })
+        }
+        AiCoachProvider::DeepSeek => {
+            let api_key = deepseek_key?;
+            let base_url = std::env::var("DEEPSEEK_BASE_URL")
+                .unwrap_or_else(|_| "https://api.deepseek.com".to_string());
+            let model = std::env::var("DEEPSEEK_MODEL")
+                .unwrap_or_else(|_| "deepseek-chat".to_string());
+            let max_tokens = std::env::var("AI_COACH_MAX_TOKENS").ok()
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(1024);
+            log::info!("AI Coach enabled (provider: DeepSeek, model: {})", model);
+            Some(AiCoachConfig {
+                provider,
+                api_key,
+                base_url,
+                model,
+                max_tokens,
+                openrouter_http_referer: None,
+                openrouter_title: None,
             })
         }
     }

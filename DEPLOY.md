@@ -9,7 +9,7 @@
 │                      │                      │                          │
 │  • UI (React)        │                      │  • Riot API + рейт-лимит │
 │  • LCU детекция      │                      │  • PostgreSQL            │
-│  • Overlay + хоткеи  │                      │  • AI Coach (Anthropic)  │
+│  • Overlay + хоткеи  │                      │  • AI Coach (Anthropic / OpenRouter / DeepSeek) │
 │  • Мини SQLite кеш   │                      │                          │
 └──────────────────────┘                      └──────────────────────────┘
 ```
@@ -59,14 +59,30 @@ PORT=3000
 RUST_LOG=info
 
 # AI Coach (опционально — сервер работает и без него)
+AI_COACH_PROVIDER=deepseek
+AI_COACH_MAX_TOKENS=1024
+
+# Anthropic
 ANTHROPIC_AUTH_TOKEN=твой-ключ-anthropic
 ANTHROPIC_BASE_URL=https://api.anthropic.com
 ANTHROPIC_MODEL=claude-sonnet-4-6
+
+# OpenRouter
+OPENROUTER_API_KEY=
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_MODEL=openai/gpt-4o-mini
+OPENROUTER_HTTP_REFERER=
+OPENROUTER_TITLE=
+
+# DeepSeek
+DEEPSEEK_API_KEY=твой-ключ-deepseek
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-chat
 ```
 
 > **Важно:** Riot API ключ разработчика истекает каждые 24 часа. Для постоянного сервера нужен Production ключ (подавать заявку на developer.riotgames.com).
 
-> **AI Coach:** Если `ANTHROPIC_AUTH_TOKEN` не задан, сервер запустится нормально — просто AI тренер будет недоступен. При нажатии «Получить совет» клиент покажет ошибку.
+> **AI Coach:** Поддерживаются `anthropic`, `openrouter` и `deepseek`. Если ключ выбранного провайдера не задан, сервер запустится нормально — просто AI тренер будет недоступен. При нажатии «Получить совет» клиент покажет ошибку.
 
 ### Сборка и запуск
 
@@ -164,9 +180,9 @@ sudo ufw allow 443/tcp     # с Caddy (HTTPS)
 | `server/src/routes/players.rs` | Поиск игрока, мастерство, история матчей |
 | `server/src/routes/matches.rs` | Детали матча |
 | `server/src/routes/live.rs` | Обогащение live game данных рангами |
-| `server/src/routes/coach.rs` | AI Coach — SSE стрим с Anthropic API |
+| `server/src/routes/coach.rs` | AI Coach — SSE стрим с Anthropic / OpenRouter / DeepSeek |
 | `server/migrations/` | SQL миграции (запускаются автоматически) |
-| `server/.env` | RIOT_API_KEY, DATABASE_URL, PORT, ANTHROPIC_* |
+| `server/.env` | RIOT_API_KEY, DATABASE_URL, PORT, AI_COACH_PROVIDER, ANTHROPIC_* / OPENROUTER_* / DEEPSEEK_* |
 
 ### API эндпоинты сервера
 
@@ -200,7 +216,7 @@ LEAGUEEYE_SERVER_URL=http://ip-твоего-сервера:3000
 
 > Если сервер за Caddy с HTTPS: `LEAGUEEYE_SERVER_URL=https://leagueeye.твой-домен.ru`
 
-> **Примечание:** API ключи (Riot, Anthropic) больше НЕ нужны на клиенте — они хранятся только на сервере.
+> **Примечание:** API ключи (Riot, Anthropic, OpenRouter, DeepSeek) больше НЕ нужны на клиенте — они хранятся только на сервере.
 
 ### Сборка EXE
 

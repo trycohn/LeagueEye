@@ -40,19 +40,27 @@ LEAGUEEYE_SERVER_URL=http://localhost:3000   # or remote server IP/domain
 RIOT_API_KEY=RGAPI-...                       # Required (developer.riotgames.com)
 DATABASE_URL=postgres://user:pass@host/db    # Required (PostgreSQL)
 PORT=3000
-ANTHROPIC_AUTH_TOKEN=...                     # Optional (AI Coach disabled without it)
+AI_COACH_PROVIDER=anthropic                  # Optional: anthropic | openrouter | deepseek
+AI_COACH_MAX_TOKENS=1024                     # Optional
+ANTHROPIC_AUTH_TOKEN=...                     # Optional
 ANTHROPIC_BASE_URL=https://api.anthropic.com # Optional
 ANTHROPIC_MODEL=claude-sonnet-4-6            # Optional
+OPENROUTER_API_KEY=...                       # Optional
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1 # Optional
+OPENROUTER_MODEL=openai/gpt-4o-mini          # Optional
+DEEPSEEK_API_KEY=...                         # Optional
+DEEPSEEK_BASE_URL=https://api.deepseek.com   # Optional
+DEEPSEEK_MODEL=deepseek-chat                 # Optional
 ```
 
-The server supports both Anthropic and OpenRouter as AI providers. If `ANTHROPIC_AUTH_TOKEN` is not set, the server starts normally — AI coaching simply won't be available.
+The server supports Anthropic, OpenRouter, and DeepSeek as AI providers. If the selected provider key is not set, the server starts normally — AI coaching simply won't be available.
 
 ## Architecture
 
 Client-server Tauri 2 app. Windows desktop client (thin) + Axum HTTP server (all heavy lifting). League of Legends player stats, match history, live game, AI coaching. Riot API region: EUW (RU).
 
 ```
-React UI ──invoke()──► Tauri commands ──HTTP──► Axum server ──► Riot API / PostgreSQL / Anthropic
+React UI ──invoke()──► Tauri commands ──HTTP──► Axum server ──► Riot API / PostgreSQL / AI provider
                               │
                      LCU API (local only, curl.exe)
 ```
@@ -65,13 +73,13 @@ React UI ──invoke()──► Tauri commands ──HTTP──► Axum server 
 
 ### Server (server/src/)
 
-- **main.rs** — Axum router, PostgreSQL pool (sqlx), auto-runs migrations, `AppState` with `RiotApiClient`, `Db`, optional `AiCoachConfig` (Anthropic or OpenRouter)
+- **main.rs** — Axum router, PostgreSQL pool (sqlx), auto-runs migrations, `AppState` with `RiotApiClient`, `Db`, optional `AiCoachConfig` (Anthropic / OpenRouter / DeepSeek)
 - **riot_api.rs** — Riot API HTTP client with 2-level rate limiter (18 req/s + 95 req/2min), 429 retry logic
 - **db.rs** — PostgreSQL queries (sqlx). Tables: accounts, matches, match_participants, rank_snapshots, champion_mastery. Includes dashboard aggregate queries (best players by role, top winrate champions)
 - **routes/players.rs** — GET `/api/players/{name}/{tag}`, `/api/players/{puuid}/mastery`, `/api/players/{puuid}/matches`. Smart caching: serves cached data immediately, fetches fresh matches in background
 - **routes/matches.rs** — GET `/api/matches/{matchId}` — cache-first, falls back to Riot API
 - **routes/live.rs** — POST `/api/live/enrich` (client sends LCU data, server adds ranks via Spectator API + league entries)
-- **routes/coach.rs** — POST `/api/coach/stream` (receives `CoachingContext`, returns SSE stream from Anthropic or OpenRouter). Russian-language system prompts with champion-specific guidance
+- **routes/coach.rs** — POST `/api/coach/stream` (receives `CoachingContext`, returns SSE stream from Anthropic / OpenRouter / DeepSeek). Russian-language system prompts with champion-specific guidance
 - **routes/global.rs** — GET `/api/global/dashboard` — aggregate stats from PostgreSQL
 
 ### Client (src-tauri/src/)
@@ -102,7 +110,7 @@ Triple Vite entry points: `index.html` (main app), `overlay.html` (coach overlay
 ```
 Client: LCU allgamedata → build CoachingContext (ai_coach.rs)
   ↓ POST /api/coach/stream (JSON body)
-Server: build_system_prompt + build_user_message → POST Anthropic/OpenRouter (stream:true)
+Server: build_system_prompt + build_user_message → POST configured AI provider (stream:true)
   ↓ SSE: CoachStreamPayload {kind: "start"|"delta"|"end"|"error", text}
 Client: api_client reads SSE → app.emit("coach-stream") → React useAiCoach hook
 ```

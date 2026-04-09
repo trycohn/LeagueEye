@@ -691,7 +691,7 @@ pub async fn request_coaching(
             })?
     };
 
-    // Spawn streaming task — sends context to server, server calls Anthropic
+    // Spawn streaming task — sends context to server, server calls configured AI provider
     let api_client = api.inner().clone();
     let coach_state_arc = Arc::clone(&*coach_state);
     let app_handle = app.clone();

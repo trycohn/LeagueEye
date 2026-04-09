@@ -260,6 +260,22 @@ fn log_outbound_request(provider: &str, url: &str, body: &serde_json::Value) {
     }
 }
 
+fn provider_display_name(provider: AiCoachProvider) -> &'static str {
+    match provider {
+        AiCoachProvider::Anthropic => "Anthropic",
+        AiCoachProvider::OpenRouter => "OpenRouter",
+        AiCoachProvider::DeepSeek => "DeepSeek",
+    }
+}
+
+fn invalid_api_key_message(provider: AiCoachProvider) -> &'static str {
+    match provider {
+        AiCoachProvider::Anthropic => "Неверный API ключ Anthropic на сервере",
+        AiCoachProvider::OpenRouter => "Неверный API ключ OpenRouter на сервере",
+        AiCoachProvider::DeepSeek => "Неверный API ключ DeepSeek на сервере",
+    }
+}
+
 fn make_ai_stream(
     config: Option<crate::AiCoachConfig>,
     system_prompt: String,
@@ -268,7 +284,9 @@ fn make_ai_stream(
     let provider = config.as_ref().map(|c| c.provider);
     match provider {
         Some(AiCoachProvider::Anthropic) => Box::pin(make_anthropic_stream(config, system_prompt, user_message)),
-        Some(AiCoachProvider::OpenRouter) => Box::pin(make_openrouter_stream(config, system_prompt, user_message)),
+        Some(AiCoachProvider::OpenRouter) | Some(AiCoachProvider::DeepSeek) => {
+            Box::pin(make_openai_compatible_stream(config, system_prompt, user_message))
+        }
         None => Box::pin(make_no_config_stream()),
     }
 }
@@ -452,7 +470,7 @@ fn make_anthropic_stream(
     }
 }
 
-fn make_openrouter_stream(
+fn make_openai_compatible_stream(
     config: Option<crate::AiCoachConfig>,
     system_prompt: String,
     user_message: String,
@@ -470,6 +488,8 @@ fn make_openrouter_stream(
                 return;
             }
         };
+        let provider = config.provider;
+        let provider_name = provider_display_name(provider);
 
         // Emit start
         yield Ok(Event::default().data(
@@ -497,8 +517,13 @@ fn make_openrouter_stream(
 
         let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
         let send_start = Instant::now();
-        log_outbound_request("OPENROUTER", &url, &body);
-        log::info!("[coach] Отправляю запрос к OpenRouter (model: {})", config.model);
+        log_outbound_request(provider_name, &url, &body);
+        log::info!(
+            "[coach] Отправляю запрос к {} (provider: {}, model: {})",
+            url,
+            provider_name,
+            config.model
+        );
 
         let mut req = client
             .post(&url)
@@ -506,21 +531,27 @@ fn make_openrouter_stream(
             .header("content-type", "application/json")
             .json(&body);
 
-        if let Some(r) = &config.openrouter_http_referer {
-            req = req.header("http-referer", r);
-        }
-        if let Some(t) = &config.openrouter_title {
-            req = req.header("x-openrouter-title", t);
+        if provider == AiCoachProvider::OpenRouter {
+            if let Some(r) = &config.openrouter_http_referer {
+                req = req.header("http-referer", r);
+            }
+            if let Some(t) = &config.openrouter_title {
+                req = req.header("x-openrouter-title", t);
+            }
         }
 
         let response = req.send().await;
 
-        log::info!("[coach] Ответ от OpenRouter получен через {:.2}s", send_start.elapsed().as_secs_f32());
+        log::info!(
+            "[coach] Ответ от {} получен через {:.2}s",
+            provider_name,
+            send_start.elapsed().as_secs_f32()
+        );
 
         let mut response = match response {
             Ok(r) => r,
             Err(e) => {
-                log::error!("[coach] Ошибка соединения с OpenRouter: {}", e);
+                log::error!("[coach] Ошибка соединения с {}: {}", provider_name, e);
                 yield Ok(Event::default().data(
                     serde_json::to_string(&CoachStreamPayload {
                         kind: "error".to_string(),
@@ -534,9 +565,9 @@ fn make_openrouter_stream(
         if !response.status().is_success() {
             let status = response.status();
             let body_text = response.text().await.unwrap_or_default();
-            log::error!("[coach] OpenRouter API error ({}): {}", status, body_text);
+            log::error!("[coach] {} API error ({}): {}", provider_name, status, body_text);
             let msg = if status.as_u16() == 401 {
-                "Неверный API ключ OpenRouter на сервере".to_string()
+                invalid_api_key_message(provider).to_string()
             } else {
                 format!("AI API ошибка ({}): {}", status, body_text)
             };
@@ -549,8 +580,8 @@ fn make_openrouter_stream(
             return;
         }
 
-        // Read SSE stream from OpenRouter line-by-line.
-        // OpenRouter often sends "data: {...}\n" with a single newline rather
+        // Read OpenAI-compatible SSE stream line-by-line.
+        // Some providers send "data: {...}\n" with a single newline rather
         // than the double-newline that the SSE spec technically requires.
         // Waiting for "\n\n" causes massive buffering delays.
         let mut buffer = String::new();
@@ -592,7 +623,7 @@ fn make_openrouter_stream(
                             .and_then(|e| e.get("message"))
                             .and_then(|m| m.as_str())
                         {
-                            log::error!("[coach] OpenRouter stream error: {}", err_msg);
+                            log::error!("[coach] {} stream error: {}", provider_name, err_msg);
                             yield Ok(Event::default().data(
                                 serde_json::to_string(&CoachStreamPayload {
                                     kind: "error".to_string(),
@@ -607,7 +638,7 @@ fn make_openrouter_stream(
         }
 
         // Emit end
-        log::info!("[coach] OpenRouter stream completed");
+        log::info!("[coach] {} stream completed", provider_name);
         yield Ok(Event::default().data(
             serde_json::to_string(&CoachStreamPayload {
                 kind: "end".to_string(),
