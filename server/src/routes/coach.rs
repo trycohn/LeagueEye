@@ -244,6 +244,22 @@ pub async fn stream_coach(
 
 type CoachStream = Pin<Box<dyn Stream<Item = Result<Event, std::convert::Infallible>> + Send>>;
 
+fn log_outbound_request(provider: &str, url: &str, body: &serde_json::Value) {
+    match serde_json::to_string_pretty(body) {
+        Ok(serialized) => log::info!(
+            "[coach] === OUTBOUND {} REQUEST ===\nPOST {}\n{}\n========================",
+            provider,
+            url,
+            serialized
+        ),
+        Err(error) => log::warn!(
+            "[coach] Failed to serialize {} request body for logging: {}",
+            provider,
+            error
+        ),
+    }
+}
+
 fn make_ai_stream(
     config: Option<crate::AiCoachConfig>,
     system_prompt: String,
@@ -313,6 +329,7 @@ fn make_anthropic_stream(
 
         let url = format!("{}/v1/messages", config.base_url.trim_end_matches('/'));
         let send_start = Instant::now();
+        log_outbound_request("ANTHROPIC", &url, &body);
         log::info!("[coach] Отправляю запрос к {} (model: {})", url, config.model);
 
         let response = client
@@ -329,6 +346,7 @@ fn make_anthropic_stream(
         let mut response = match response {
             Ok(r) => r,
             Err(e) => {
+                log::error!("[coach] Ошибка соединения с Anthropic: {}", e);
                 yield Ok(Event::default().data(
                     serde_json::to_string(&CoachStreamPayload {
                         kind: "error".to_string(),
@@ -342,6 +360,7 @@ fn make_anthropic_stream(
         if !response.status().is_success() {
             let status = response.status();
             let body_text = response.text().await.unwrap_or_default();
+            log::error!("[coach] Anthropic API error ({}): {}", status, body_text);
             let msg = if status.as_u16() == 401 {
                 "Неверный API ключ Anthropic на сервере".to_string()
             } else {
@@ -408,6 +427,7 @@ fn make_anthropic_stream(
                                 .and_then(|e| e.get("message"))
                                 .and_then(|m| m.as_str())
                                 .unwrap_or("Unknown AI error");
+                            log::error!("[coach] Anthropic stream error: {}", err_msg);
                             yield Ok(Event::default().data(
                                 serde_json::to_string(&CoachStreamPayload {
                                     kind: "error".to_string(),
@@ -422,6 +442,7 @@ fn make_anthropic_stream(
         }
 
         // Emit end
+        log::info!("[coach] Anthropic stream completed");
         yield Ok(Event::default().data(
             serde_json::to_string(&CoachStreamPayload {
                 kind: "end".to_string(),
@@ -476,6 +497,7 @@ fn make_openrouter_stream(
 
         let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
         let send_start = Instant::now();
+        log_outbound_request("OPENROUTER", &url, &body);
         log::info!("[coach] Отправляю запрос к OpenRouter (model: {})", config.model);
 
         let mut req = client
@@ -498,6 +520,7 @@ fn make_openrouter_stream(
         let mut response = match response {
             Ok(r) => r,
             Err(e) => {
+                log::error!("[coach] Ошибка соединения с OpenRouter: {}", e);
                 yield Ok(Event::default().data(
                     serde_json::to_string(&CoachStreamPayload {
                         kind: "error".to_string(),
@@ -511,6 +534,7 @@ fn make_openrouter_stream(
         if !response.status().is_success() {
             let status = response.status();
             let body_text = response.text().await.unwrap_or_default();
+            log::error!("[coach] OpenRouter API error ({}): {}", status, body_text);
             let msg = if status.as_u16() == 401 {
                 "Неверный API ключ OpenRouter на сервере".to_string()
             } else {
@@ -568,6 +592,7 @@ fn make_openrouter_stream(
                             .and_then(|e| e.get("message"))
                             .and_then(|m| m.as_str())
                         {
+                            log::error!("[coach] OpenRouter stream error: {}", err_msg);
                             yield Ok(Event::default().data(
                                 serde_json::to_string(&CoachStreamPayload {
                                     kind: "error".to_string(),
@@ -582,6 +607,7 @@ fn make_openrouter_stream(
         }
 
         // Emit end
+        log::info!("[coach] OpenRouter stream completed");
         yield Ok(Event::default().data(
             serde_json::to_string(&CoachStreamPayload {
                 kind: "end".to_string(),

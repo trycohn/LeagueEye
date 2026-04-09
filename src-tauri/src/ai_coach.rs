@@ -61,7 +61,7 @@ pub fn build_context_from_allgamedata(
         let scores_info = me_player.scores.as_ref()
             .map(|s| format!("K:{} D:{} A:{} CS:{:?} Lv:{}",
                 s.kills.unwrap_or(-1), s.deaths.unwrap_or(-1),
-                s.assists.unwrap_or(-1), s.creep_score, me_player.level))
+                s.assists.unwrap_or(-1), s.creep_score, me_player.level.unwrap_or(-1)))
             .unwrap_or_else(|| "scores=null".to_string());
         let active_cs = alldata.active_player.as_ref()
             .and_then(|a| a.level)

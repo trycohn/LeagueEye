@@ -102,10 +102,28 @@ async fn main() {
         .unwrap_or(3000);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    log::info!("LeagueEye server listening on {}", addr);
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(listener) => {
+            log::info!("LeagueEye server listening on {}", addr);
+            listener
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+            log::error!(
+                "Failed to start LeagueEye server on {}: address already in use. Another process is already listening on this port.",
+                addr
+            );
+            std::process::exit(98);
+        }
+        Err(error) => {
+            log::error!("Failed to bind LeagueEye server to {}: {}", addr, error);
+            std::process::exit(1);
+        }
+    };
 
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    if let Err(error) = axum::serve(listener, app).await {
+        log::error!("LeagueEye server stopped with error: {}", error);
+        std::process::exit(1);
+    }
 }
 
 fn load_ai_coach_config() -> Option<AiCoachConfig> {
