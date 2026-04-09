@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with this repository.
 
 Всегда отвечай мне на русском языке, если я явно не попрошу другой язык.
 
@@ -24,6 +24,10 @@ cargo check -p leagueeye-server            # Server only
 cargo check -p leagueeye-shared            # Shared models only
 ```
 
+**Rust version:** 1.88.0 (pinned in `rust-toolchain.toml`)
+
+**No tests configured.** There are no `#[test]` functions or test runners in any crate.
+
 ## Environment Variables
 
 **Client** (`src-tauri/.env`):
@@ -41,64 +45,80 @@ ANTHROPIC_BASE_URL=https://api.anthropic.com # Optional
 ANTHROPIC_MODEL=claude-sonnet-4-6            # Optional
 ```
 
+The server supports both Anthropic and OpenRouter as AI providers. If `ANTHROPIC_AUTH_TOKEN` is not set, the server starts normally — AI coaching simply won't be available.
+
 ## Architecture
 
-Client-server Tauri 2 app. Windows desktop client (thin) + Axum HTTP server (all heavy lifting). League of Legends player stats, match history, live game, AI coaching.
+Client-server Tauri 2 app. Windows desktop client (thin) + Axum HTTP server (all heavy lifting). League of Legends player stats, match history, live game, AI coaching. Riot API region: EUW (RU).
 
 ```
 React UI ──invoke()──► Tauri commands ──HTTP──► Axum server ──► Riot API / PostgreSQL / Anthropic
                               │
-                     LCU API (local only)
+                     LCU API (local only, curl.exe)
 ```
 
 ### Cargo Workspace (3 crates)
 
 - **`shared/`** (`leagueeye-shared`) — All DTOs shared between server and client. Single source of truth for data shapes.
 - **`server/`** (`leagueeye-server`) — Axum HTTP server: Riot API with rate limiter, PostgreSQL, AI Coach SSE streaming.
-- **`src-tauri/`** (`league-eye`) — Thin Tauri client: LCU detection, overlay, keyboard hooks, HTTP to server.
+- **`src-tauri/`** (`league-eye`) — Thin Tauri client: LCU detection, overlay windows, keyboard hooks, HTTP proxy to server.
 
 ### Server (server/src/)
 
-- **main.rs** — Axum router, PostgreSQL pool (sqlx), `AppState` with `RiotApiClient`, `Db`, optional `AiCoachConfig`
-- **riot_api.rs** — Riot API HTTP client with 2-level rate limiter (18 req/s + 95 req/2min)
-- **db.rs** — PostgreSQL queries (sqlx). Tables: accounts, matches, match_participants, rank_snapshots, champion_mastery
-- **routes/players.rs** — GET `/api/players/{name}/{tag}`, `/api/players/{puuid}/mastery`, `/api/players/{puuid}/matches`
-- **routes/matches.rs** — GET `/api/matches/{matchId}`
-- **routes/live.rs** — POST `/api/live/enrich` (client sends LCU data, server adds ranks via Spectator API)
-- **routes/coach.rs** — POST `/api/coach/stream` (receives `CoachingContext`, returns SSE stream from Anthropic)
+- **main.rs** — Axum router, PostgreSQL pool (sqlx), auto-runs migrations, `AppState` with `RiotApiClient`, `Db`, optional `AiCoachConfig` (Anthropic or OpenRouter)
+- **riot_api.rs** — Riot API HTTP client with 2-level rate limiter (18 req/s + 95 req/2min), 429 retry logic
+- **db.rs** — PostgreSQL queries (sqlx). Tables: accounts, matches, match_participants, rank_snapshots, champion_mastery. Includes dashboard aggregate queries (best players by role, top winrate champions)
+- **routes/players.rs** — GET `/api/players/{name}/{tag}`, `/api/players/{puuid}/mastery`, `/api/players/{puuid}/matches`. Smart caching: serves cached data immediately, fetches fresh matches in background
+- **routes/matches.rs** — GET `/api/matches/{matchId}` — cache-first, falls back to Riot API
+- **routes/live.rs** — POST `/api/live/enrich` (client sends LCU data, server adds ranks via Spectator API + league entries)
+- **routes/coach.rs** — POST `/api/coach/stream` (receives `CoachingContext`, returns SSE stream from Anthropic or OpenRouter). Russian-language system prompts with champion-specific guidance
+- **routes/global.rs** — GET `/api/global/dashboard` — aggregate stats from PostgreSQL
 
 ### Client (src-tauri/src/)
 
-- **lib.rs** — Tauri setup, overlay window, low-level Windows keyboard hook (Shift+E), state management
-- **commands.rs** — `#[tauri::command]` handlers. LCU calls are local; everything else proxies to server
-- **api_client.rs** — `ServerApiClient`: reqwest HTTP client to server. Includes `stream_coaching()` which reads SSE and emits Tauri events
-- **ai_coach.rs** — `CoachState` (deduplication), `build_context_from_allgamedata()` and `build_context_champ_select()` (context builders from LCU data). Prompts and streaming live on server.
-- **lcu.rs** — League Client detection (lockfile parsing), champ select, gameflow phase, Live Client Data API (localhost:2999)
-- **db.rs** — Local SQLite: only `accounts` table for instant startup cache
+- **lib.rs** — Tauri entry, 3 webviews (main + overlay + gold-overlay), system tray with Russian "Закрыть" menu, main window hides to tray on close. Installs Windows low-level keyboard hook (WH_KEYBOARD_LL) for Shift+E during games
+- **commands.rs** — 17 `#[tauri::command]` handlers. LCU calls are local; everything else proxies to server via HTTP
+- **api_client.rs** — `ServerApiClient`: reqwest HTTP client to server. `stream_coaching()` reads SSE line-by-line and emits Tauri `coach-stream` events. Self-signed TLS: `danger_accept_invalid_certs` for `https://` URLs
+- **ai_coach.rs** — `CoachState` (dedup guard). `build_context_from_allgamedata()` (in-game rich stats) and `build_context_champ_select()` (draft phase) — transform LCU data into `CoachingContext` with champion meta info
+- **lcu.rs** — League Client detection: lockfile parsing across C:/D:/E:/F:/ drives + PowerShell process fallback. Uses `curl.exe` (not reqwest) for LCU API to bypass TLS issues. Champ select session, gameflow phase, Live Client Data API (localhost:2999)
+- **db.rs** — Local SQLite: only `accounts` table for instant startup cache. All match data moved to server PostgreSQL
 
-Tauri managed state: `ServerApiClient`, `SharedDb`, `CoachState`, `ChampionNamesCache`, `LastLiveState`
+Tauri managed state: `ServerApiClient`, `SharedDb`, `CoachState`, `ChampionNamesCache`, `ItemCostCache`, `LastLiveState`
 
 ### Frontend (src/)
 
-- **App.tsx** — 3 views: "home", "profile", "live". Auto-switches to "live" during champ select/in-game
-- **hooks/useRiotApi.ts** — Profile, matches, mastery, champion stats. Generation counter (`genRef`) aborts stale ops; busy flag prevents concurrent searches
-- **hooks/useLiveGame.ts** — Polls live game: 3s (champ select), 15s (in-game), 8s (idle)
-- **hooks/useAiCoach.ts** — Module-level persistent state (survives remount). Single global listener for `coach-stream` Tauri event
-- **hooks/useChampionNames.ts** — DDragon champion ID-to-name cache
-- **lib/types.ts** — TypeScript interfaces mirroring `shared/src/models.rs`
-- **lib/ddragon.ts** — Data Dragon CDN URL builders, formatting utilities (DDragon version pinned)
+Triple Vite entry points: `index.html` (main app), `overlay.html` (coach overlay), `gold-overlay.html` (gold comparison overlay).
 
-Dual Vite entry points: `index.html` (main app) + `overlay.html` (coach overlay window).
+- **App.tsx** — 3 views: "home", "profile", "live". Auto-switches to "live" during champ select/in-game (1.5s debounce to avoid flicker). Shows/hides overlay windows automatically
+- **hooks/useRiotApi.ts** — Profile, matches, mastery, champion stats. State machine with `genRef` (aborts stale ops), `busyRef` (prevents concurrent searches), `lastSearchRef` (caches last result)
+- **hooks/useLiveGame.ts** — Adaptive polling: 3s (champ select), 15s (in-game), 8s (idle)
+- **hooks/useAiCoach.ts** — Module-level persistent state (survives remount). Single global listener for `coach-stream` Tauri event. Accumulates streaming text into messages
+- **hooks/useChampionNames.ts** — DDragon champion ID-to-name cache
+- **lib/types.ts** — TypeScript interfaces mirroring `shared/src/models.rs` (camelCase)
+- **lib/ddragon.ts** — Data Dragon CDN URL builders (version pinned), tier/rank/position formatters, spell ID→name map
 
 ### AI Coach Data Flow
 
 ```
 Client: LCU allgamedata → build CoachingContext (ai_coach.rs)
   ↓ POST /api/coach/stream (JSON body)
-Server: build_system_prompt + build_user_message → POST Anthropic Messages API (stream:true)
+Server: build_system_prompt + build_user_message → POST Anthropic/OpenRouter (stream:true)
   ↓ SSE: CoachStreamPayload {kind: "start"|"delta"|"end"|"error", text}
 Client: api_client reads SSE → app.emit("coach-stream") → React useAiCoach hook
 ```
+
+### Server Routes
+
+| Method | Route | Description |
+|---|---|---|
+| GET | `/health` | Health check |
+| GET | `/api/global/dashboard` | Aggregate stats (best players, top champions) |
+| GET | `/api/players/{name}/{tag}` | Search player by Riot ID |
+| GET | `/api/players/{puuid}/mastery` | Top champion mastery |
+| GET | `/api/players/{puuid}/matches` | Match history + champion stats (paginated) |
+| GET | `/api/matches/{matchId}` | Match detail (all 10 players) |
+| POST | `/api/live/enrich` | Enrich LCU data with ranks |
+| POST | `/api/coach/stream` | SSE AI coaching |
 
 ### Files That Must Stay in Sync
 
@@ -115,3 +135,10 @@ Client: api_client reads SSE → app.emit("coach-stream") → React useAiCoach h
 - Self-signed TLS: `api_client.rs` uses `danger_accept_invalid_certs` when URL starts with `https://`
 - Server migrations: `server/migrations/` (sqlx, auto-run on startup)
 - Deployment guide: see `DEPLOY.md`
+
+## Tauri Window Config
+
+- **Main window**: 1280×780, min 1024×600, centered, resizable
+- **Overlay**: 420×200, transparent, always-on-top, no decorations, skip taskbar
+- **Gold overlay**: 280×300, same properties as overlay
+- Left-click tray icon restores window, right-click shows "Закрыть" menu
