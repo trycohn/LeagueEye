@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::State;
 
-use crate::ai_coach::{self, CoachState};
+use crate::ai_coach::{self, CoachState, ChampionMetaInfo, ChampionAbility};
 use crate::api_client::{ServerApiClient, EnrichLiveRequest, EnrichLivePlayer};
 use crate::db::Db;
 use crate::lcu;
@@ -12,9 +12,12 @@ type SharedDb = Arc<Mutex<Db>>;
 
 // ─── ChampionNamesCache (чтобы не загружать DDragon каждые 15 сек) ──────────
 
+// ─── ChampionNamesCache (чтобы не загружать DDragon каждые 15 сек) ──────────
+
 pub struct ChampionNamesCache {
     pub id_to_name: HashMap<i64, String>,
     pub name_to_id: HashMap<String, i64>,
+    pub champion_meta: HashMap<String, ChampionMetaInfo>, // key = internal name
     pub loaded: bool,
 }
 
@@ -23,6 +26,7 @@ impl ChampionNamesCache {
         Self {
             id_to_name: HashMap::new(),
             name_to_id: HashMap::new(),
+            champion_meta: HashMap::new(),
             loaded: false,
         }
     }
@@ -366,7 +370,7 @@ pub async fn get_live_game(
 
     if let Ok(alldata) = lcu::get_live_client_allgamedata() {
         if let Some(all_players) = &alldata.all_players {
-            let (_id_to_name, name_to_id) = get_or_fetch_champion_names(&champ_cache).await;
+            let (_id_to_name, name_to_id, _meta) = get_or_fetch_champion_names(&champ_cache).await;
             let my_name = identity.as_ref().map(|id| id.game_name.clone()).unwrap_or_default();
 
             let my_team_str = all_players.iter()
@@ -491,6 +495,8 @@ pub async fn test_coaching(
                 summoner_spells: vec!["Flash".into(), "Heal".into()],
                 keystone_rune: "Lethal Tempo".into(),
                 is_dead: false, respawn_timer: 0.0,
+                champion_resource: Some("Mana".into()),
+                champion_class: Some("Marksman".into()),
             },
         ],
         enemy_team: vec![
@@ -503,11 +509,17 @@ pub async fn test_coaching(
                 summoner_spells: vec!["Flash".into(), "Heal".into()],
                 keystone_rune: "Fleet Footwork".into(),
                 is_dead: false, respawn_timer: 0.0,
+                champion_resource: Some("Mana".into()),
+                champion_class: Some("Marksman".into()),
             },
         ],
         recent_events: vec![
             format!("[10:00] Тестовый запрос от пользователя: {}", message),
         ],
+        my_champion_resource: Some("Mana".into()),
+        my_champion_class: Some("Marksman".into()),
+        my_champion_abilities_summary: None,
+        my_champion_ally_tips: None,
     };
 
     let api_client = api.inner().clone();
@@ -559,7 +571,7 @@ pub async fn request_coaching(
             e
         })?;
 
-        let (champ_names, _) = get_or_fetch_champion_names(&champ_cache).await;
+        let (champ_names, _, _) = get_or_fetch_champion_names(&champ_cache).await;
 
         let mut my_team_players = Vec::new();
         let mut enemy_team_players = Vec::new();
@@ -596,6 +608,13 @@ pub async fn request_coaching(
                 });
             }
         }
+
+        // Collect all champion internal names for meta fetch
+        let all_champ_names: Vec<String> = my_team_players.iter()
+            .chain(enemy_team_players.iter())
+            .filter_map(|p| champ_names.get(&p.champion_id).cloned())
+            .collect();
+        let champ_meta = ensure_champion_meta(&champ_cache, &all_champ_names).await;
 
         // Enrich ranks via server (needed for coach context)
         let my_puuid = my_team_players.iter()
@@ -635,6 +654,7 @@ pub async fn request_coaching(
             &my_team_players,
             &enemy_team_players,
             &champ_names,
+            &champ_meta,
             my_puuid.as_deref(),
         )
     } else {
@@ -651,7 +671,19 @@ pub async fn request_coaching(
             e
         })?;
 
-        ai_coach::build_context_from_allgamedata(&alldata, &identity.game_name)
+        // Collect all champion internal names from the game
+        let all_champ_names: Vec<String> = alldata.all_players.as_ref()
+            .map(|players| {
+                players.iter()
+                    .filter_map(|p| p.champion_name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let (_, _, _champ_meta) = get_or_fetch_champion_names(&champ_cache).await;
+        let champ_meta = ensure_champion_meta(&champ_cache, &all_champ_names).await;
+
+        ai_coach::build_context_from_allgamedata(&alldata, &identity.game_name, &champ_meta)
             .ok_or_else(|| {
                 let mut s = coach_state.lock().unwrap();
                 s.is_requesting = false;
@@ -674,14 +706,14 @@ pub async fn request_coaching(
     Ok(())
 }
 
-/// Fetch champion names, using Tauri-managed cache when available
+/// Fetch champion names + basic metadata (resource, tags), using Tauri-managed cache when available
 async fn get_or_fetch_champion_names(
     cache: &Arc<Mutex<ChampionNamesCache>>,
-) -> (HashMap<i64, String>, HashMap<String, i64>) {
+) -> (HashMap<i64, String>, HashMap<String, i64>, HashMap<String, ChampionMetaInfo>) {
     {
         let c = cache.lock().unwrap();
         if c.loaded {
-            return (c.id_to_name.clone(), c.name_to_id.clone());
+            return (c.id_to_name.clone(), c.name_to_id.clone(), c.champion_meta.clone());
         }
     }
 
@@ -692,6 +724,7 @@ async fn get_or_fetch_champion_names(
 
     let mut id_map: HashMap<i64, String> = HashMap::new();
     let mut name_map: HashMap<String, i64> = HashMap::new();
+    let mut meta_map: HashMap<String, ChampionMetaInfo> = HashMap::new();
 
     let url_en = "https://ddragon.leagueoflegends.com/cdn/16.7.1/data/en_US/champion.json";
     if let Ok(resp) = client.get(url_en).send().await {
@@ -705,6 +738,23 @@ async fn get_or_fetch_champion_names(
                             if let Some(display_name) = info.get("name").and_then(|n| n.as_str()) {
                                 name_map.insert(display_name.to_string(), id);
                             }
+                            // Extract resource and tags (available in list endpoint)
+                            let resource = info.get("partype")
+                                .and_then(|r| r.as_str())
+                                .unwrap_or("None")
+                                .to_string();
+                            let tags = info.get("tags")
+                                .and_then(|t| t.as_array())
+                                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                                .unwrap_or_default();
+                            meta_map.insert(internal_id.clone(), ChampionMetaInfo {
+                                resource,
+                                tags,
+                                abilities: vec![],
+                                passive_name: String::new(),
+                                passive_desc: String::new(),
+                                ally_tips: vec![],
+                            });
                         }
                     }
                 }
@@ -729,20 +779,178 @@ async fn get_or_fetch_champion_names(
         }
     }
 
-    log::info!("[champ_cache] Loaded {} id_to_name, {} name_to_id entries", id_map.len(), name_map.len());
+    log::info!("[champ_cache] Loaded {} id_to_name, {} name_to_id, {} meta entries", id_map.len(), name_map.len(), meta_map.len());
 
     if id_map.is_empty() {
-        return (HashMap::new(), HashMap::new());
+        return (HashMap::new(), HashMap::new(), HashMap::new());
     }
 
     {
         let mut c = cache.lock().unwrap();
         c.id_to_name = id_map.clone();
         c.name_to_id = name_map.clone();
+        c.champion_meta = meta_map.clone();
         c.loaded = true;
     }
 
-    (id_map, name_map)
+    (id_map, name_map, meta_map)
+}
+
+/// Lazy-fetch detailed champion data (abilities, passive, tips) for specific champions.
+/// Only fetches if not already cached.
+async fn ensure_champion_meta(
+    cache: &Arc<Mutex<ChampionNamesCache>>,
+    champion_names: &[String], // internal names
+) -> HashMap<String, ChampionMetaInfo> {
+    // Check what's already cached
+    let existing = {
+        let c = cache.lock().unwrap();
+        c.champion_meta.clone()
+    };
+
+    let mut result = existing.clone();
+    let mut to_fetch: Vec<String> = Vec::new();
+
+    for name in champion_names {
+        if let Some(meta) = existing.get(name) {
+            if !meta.abilities.is_empty() {
+                result.insert(name.clone(), meta.clone());
+                continue;
+            }
+        }
+        to_fetch.push(name.clone());
+    }
+
+    if to_fetch.is_empty() {
+        return result;
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_default();
+
+    for name in &to_fetch {
+        let url = format!("https://ddragon.leagueoflegends.com/cdn/16.7.1/data/en_US/champion/{name}.json");
+        let Ok(resp) = client.get(&url).send().await else { continue };
+        let Ok(json) = resp.json::<serde_json::Value>().await else { continue };
+
+        let champ_data = json.get("data")
+            .and_then(|d| d.get(name))
+            .unwrap_or(&json);
+
+        let resource = champ_data.get("partype")
+            .and_then(|r| r.as_str())
+            .unwrap_or("None")
+            .to_string();
+
+        let tags = champ_data.get("tags")
+            .and_then(|t| t.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+
+        // Parse abilities
+        let mut abilities = Vec::new();
+        if let Some(spells) = champ_data.get("spells").and_then(|s| s.as_array()) {
+            let slots = ["Q", "W", "E", "R"];
+            for (i, spell) in spells.iter().take(4).enumerate() {
+                let slot = slots.get(i).unwrap_or(&"?").to_string();
+                let spell_name = spell.get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let desc = spell.get("description")
+                    .and_then(|d| d.as_str())
+                    .map(|s| strip_ddragon_html(s))
+                    .unwrap_or_default();
+                abilities.push(ChampionAbility {
+                    slot,
+                    name: spell_name,
+                    short_desc: truncate_desc(&desc, 100),
+                });
+            }
+        }
+
+        let passive = champ_data.get("passive");
+        let passive_name = passive
+            .and_then(|p| p.get("name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or("")
+            .to_string();
+        let passive_desc = passive
+            .and_then(|p| p.get("description"))
+            .and_then(|d| d.as_str())
+            .map(|s| strip_ddragon_html(s))
+            .unwrap_or_default();
+
+        let ally_tips = champ_data.get("allytips")
+            .and_then(|t| t.as_array())
+            .map(|arr| arr.iter()
+                .filter_map(|v| v.as_str().map(|s| strip_ddragon_html(s)))
+                .take(3)
+                .collect())
+            .unwrap_or_default();
+
+        let meta = ChampionMetaInfo {
+            resource,
+            tags,
+            abilities,
+            passive_name,
+            passive_desc,
+            ally_tips,
+        };
+
+        result.insert(name.clone(), meta.clone());
+
+        // Update cache
+        {
+            let mut c = cache.lock().unwrap();
+            c.champion_meta.insert(name.clone(), meta);
+        }
+    }
+
+    result
+}
+
+/// Strip DDragon HTML tags from descriptions
+fn strip_ddragon_html(s: &str) -> String {
+    let mut result = s.to_string();
+    // Remove <br> tags
+    result = result.replace("<br>", " ");
+    // Remove <mainText>, <mainText2>, etc.
+    result = strip_html_tags(&result);
+    // Clean up multiple spaces
+    while result.contains("  ") {
+        result = result.replace("  ", " ");
+    }
+    result.trim().to_string()
+}
+
+fn strip_html_tags(s: &str) -> String {
+    // Simple regex-like replacement for HTML tags — since we can't use regex crate
+    // Just remove anything between < and >
+    let mut result = String::new();
+    let mut inside_tag = false;
+    for ch in s.chars() {
+        if ch == '<' {
+            inside_tag = true;
+        } else if ch == '>' {
+            inside_tag = false;
+        } else if !inside_tag {
+            result.push(ch);
+        }
+    }
+    result
+}
+
+fn truncate_desc(s: &str, max_len: usize) -> String {
+    // Take first sentence or max_len chars
+    let end = s.find(". ").unwrap_or(s.len()).min(max_len);
+    if end < s.len() && s[end..].starts_with(". ") {
+        format!("{}.", &s[..end])
+    } else {
+        s[..end.min(s.len())].to_string()
+    }
 }
 
 // ─── item cost cache ────────────────────────────────────────────────────────
@@ -837,7 +1045,7 @@ pub async fn get_gold_comparison(
         .unwrap_or_else(|| "ORDER".to_string());
 
     let item_costs = get_or_fetch_item_costs(&item_cache).await;
-    let (id_to_name, name_to_id) = get_or_fetch_champion_names(&champ_cache).await;
+    let (id_to_name, name_to_id, _meta) = get_or_fetch_champion_names(&champ_cache).await;
 
     let calc_gold = |p: &lcu::LiveFullPlayer| -> i32 {
         p.items.as_ref().map(|items| {

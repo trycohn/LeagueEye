@@ -2,6 +2,25 @@ use crate::lcu;
 use crate::models::*;
 use std::collections::HashMap;
 
+// ─── Champion meta info (passed from commands.rs) ────────────────────────────
+
+#[derive(Clone)]
+pub struct ChampionMetaInfo {
+    pub resource: String,
+    pub tags: Vec<String>,
+    pub abilities: Vec<ChampionAbility>,
+    pub passive_name: String,
+    pub passive_desc: String,
+    pub ally_tips: Vec<String>,
+}
+
+#[derive(Clone)]
+pub struct ChampionAbility {
+    pub slot: String,
+    pub name: String,
+    pub short_desc: String,
+}
+
 // ─── State (deduplication — stays on client) ────────────────────────────────
 
 pub struct CoachState {
@@ -21,6 +40,7 @@ impl CoachState {
 pub fn build_context_from_allgamedata(
     alldata: &lcu::LiveAllGameData,
     my_name: &str,
+    champion_meta: &HashMap<String, ChampionMetaInfo>,
 ) -> Option<CoachingContext> {
     let players = alldata.all_players.as_ref()?;
     let game_info = alldata.game_data.as_ref();
@@ -35,6 +55,41 @@ pub fn build_context_from_allgamedata(
     let my_team_str = me.and_then(|p| p.team.clone()).unwrap_or_else(|| "ORDER".to_string());
     let my_champ = me.and_then(|p| p.champion_name.clone()).unwrap_or_default();
     let my_pos = me.and_then(|p| p.position.clone()).unwrap_or_default();
+
+    // Get my champion meta
+    let my_meta = champion_meta.get(&my_champ);
+    let my_resource = my_meta.map(|m| m.resource.clone());
+    let my_class = my_meta.and_then(|m| m.tags.first().cloned());
+
+    // Build abilities summary for my champion
+    let my_abilities_summary = my_meta.map(|m| {
+        let mut parts = Vec::new();
+        if !m.passive_name.is_empty() {
+            let desc = if !m.passive_desc.is_empty() {
+                format!(" — {}", m.passive_desc)
+            } else {
+                String::new()
+            };
+            parts.push(format!("  (Пассивное) {}{}", m.passive_name, desc));
+        }
+        for ability in &m.abilities {
+            let desc = if !ability.short_desc.is_empty() {
+                format!(" — {}", ability.short_desc)
+            } else {
+                String::new()
+            };
+            parts.push(format!("  ({}) {}{}", ability.slot, ability.name, desc));
+        }
+        parts.join("\n")
+    });
+
+    let my_ally_tips = my_meta.and_then(|m| {
+        if m.ally_tips.is_empty() {
+            None
+        } else {
+            Some(m.ally_tips.clone())
+        }
+    });
 
     let to_info = |p: &lcu::LiveFullPlayer| -> CoachPlayerInfo {
         let scores = p.scores.as_ref();
@@ -62,8 +117,11 @@ pub fn build_context_from_allgamedata(
             .and_then(|k| k.display_name.clone())
             .unwrap_or_default();
 
+        let champ_name = p.champion_name.clone().unwrap_or_else(|| "?".into());
+        let meta = champion_meta.get(&champ_name);
+
         CoachPlayerInfo {
-            champion_name: p.champion_name.clone().unwrap_or_else(|| "?".into()),
+            champion_name: champ_name,
             position: p.position.clone().unwrap_or_default(),
             rank_display: String::new(),
             kills: scores.and_then(|s| s.kills).unwrap_or(0),
@@ -76,6 +134,8 @@ pub fn build_context_from_allgamedata(
             keystone_rune,
             is_dead: p.is_dead.unwrap_or(false),
             respawn_timer: p.respawn_timer.unwrap_or(0.0),
+            champion_resource: meta.map(|m| m.resource.clone()),
+            champion_class: meta.and_then(|m| m.tags.first().cloned()),
         }
     };
 
@@ -171,6 +231,10 @@ pub fn build_context_from_allgamedata(
         my_team,
         enemy_team,
         recent_events,
+        my_champion_resource: my_resource,
+        my_champion_class: my_class,
+        my_champion_abilities_summary: my_abilities_summary,
+        my_champion_ally_tips: my_ally_tips,
     })
 }
 
@@ -180,6 +244,7 @@ pub fn build_context_champ_select(
     my_team: &[LivePlayer],
     enemy_team: &[LivePlayer],
     champ_names: &HashMap<i64, String>,
+    champion_meta: &HashMap<String, ChampionMetaInfo>,
     my_puuid: Option<&str>,
 ) -> CoachingContext {
     let to_info = |p: &LivePlayer| -> CoachPlayerInfo {
@@ -190,8 +255,10 @@ pub fn build_context_champ_select(
             .map(|r| format!("{} {} {} LP ({}% WR)", r.tier, r.rank, r.lp, r.winrate))
             .unwrap_or_else(|| "Unranked".to_string());
 
+        let meta = champion_meta.get(&champ);
+
         CoachPlayerInfo {
-            champion_name: champ,
+            champion_name: champ.clone(),
             position: p.assigned_position.clone().unwrap_or_default(),
             rank_display,
             kills: 0,
@@ -204,6 +271,8 @@ pub fn build_context_champ_select(
             keystone_rune: String::new(),
             is_dead: false,
             respawn_timer: 0.0,
+            champion_resource: meta.map(|m| m.resource.clone()),
+            champion_class: meta.and_then(|m| m.tags.first().cloned()),
         }
     };
 
@@ -215,6 +284,40 @@ pub fn build_context_champ_select(
         .and_then(|puuid| my_team.iter().find(|p| p.puuid.as_deref() == Some(puuid)))
         .and_then(|p| p.assigned_position.clone())
         .unwrap_or_default();
+
+    // Get my champion meta
+    let my_meta = champion_meta.get(&my_champ);
+    let my_resource = my_meta.map(|m| m.resource.clone());
+    let my_class = my_meta.and_then(|m| m.tags.first().cloned());
+
+    let my_abilities_summary = my_meta.map(|m| {
+        let mut parts = Vec::new();
+        if !m.passive_name.is_empty() {
+            let desc = if !m.passive_desc.is_empty() {
+                format!(" — {}", m.passive_desc)
+            } else {
+                String::new()
+            };
+            parts.push(format!("  (Пассивное) {}{}", m.passive_name, desc));
+        }
+        for ability in &m.abilities {
+            let desc = if !ability.short_desc.is_empty() {
+                format!(" — {}", ability.short_desc)
+            } else {
+                String::new()
+            };
+            parts.push(format!("  ({}) {}{}", ability.slot, ability.name, desc));
+        }
+        parts.join("\n")
+    });
+
+    let my_ally_tips = my_meta.and_then(|m| {
+        if m.ally_tips.is_empty() {
+            None
+        } else {
+            Some(m.ally_tips.clone())
+        }
+    });
 
     CoachingContext {
         phase: "champ_select".to_string(),
@@ -228,5 +331,9 @@ pub fn build_context_champ_select(
         my_team: my_team.iter().map(to_info).collect(),
         enemy_team: enemy_team.iter().map(to_info).collect(),
         recent_events: vec![],
+        my_champion_resource: my_resource,
+        my_champion_class: my_class,
+        my_champion_abilities_summary: my_abilities_summary,
+        my_champion_ally_tips: my_ally_tips,
     }
 }

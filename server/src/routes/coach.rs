@@ -29,6 +29,8 @@ fn build_system_prompt(phase: &str) -> String {
 - Подскажи что билдить в первую очередь и на какого противника обращать внимание
 - Будь конкретным: называй чемпионов по имени, говори "избегай файтов до 2 предметов" вместо "будь аккуратен"
 - Всегда используй ПОЛНЫЕ имена чемпионов (Мордекайзер, а не Морде; Мисс Фортуна, а не МФ; Чо'Гат, а не Чо)
+- Для упоминания умений используй ТОЛЬКО обозначения (Q), (W), (E), (R), (Пассивное) — НЕ переводи названия умений на русский
+- Ресурс чемпиона указан в данных (Мана/Энергия/Без ресурса/Ярость/Щит и т.д.) — НЕ предполагай что у чемпиона мана, если не указано иное
 - НЕ пиши введение или заключение, только советы"#.to_string();
     }
 
@@ -48,6 +50,8 @@ fn build_system_prompt(phase: &str) -> String {
 - Оценивай кто впереди (по золоту, уровням, KDA) и адаптируй советы
 - Указывай приоритетные цели для фокуса в тимфайтах
 - Всегда используй ПОЛНЫЕ имена чемпионов (Мордекайзер, а не Морде; Мисс Фортуна, а не МФ; Чо'Гат, а не Чо)
+- Для упоминания умений используй ТОЛЬКО обозначения (Q), (W), (E), (R), (Пассивное) — НЕ переводи названия умений на русский
+- Ресурс чемпиона указан в данных (Мана/Энергия/Без ресурса/Ярость/Щит и т.д.) — НЕ предполагай что у чемпиона мана, если не указано иное
 - НЕ пиши введение или заключение, только советы"#.to_string()
 }
 
@@ -71,6 +75,35 @@ fn build_user_message(ctx: &CoachingContext) -> String {
         msg.push_str(&format!("Чемпион: {} ({})\n", ctx.my_champion,
             if ctx.my_position.is_empty() { "?" } else { &ctx.my_position }));
     }
+
+    // Champion resource and class info
+    if let Some(ref resource) = ctx.my_champion_resource {
+        let display = format_resource(resource);
+        msg.push_str(&format!("Ресурс: {}\n", display));
+    }
+    if let Some(ref class) = ctx.my_champion_class {
+        msg.push_str(&format!("Класс: {}\n", class));
+    }
+
+    // Champion abilities summary
+    if let Some(ref abilities) = ctx.my_champion_abilities_summary {
+        if !abilities.is_empty() {
+            msg.push_str("Умения:\n");
+            msg.push_str(abilities);
+            msg.push('\n');
+        }
+    }
+
+    // Official Riot tips
+    if let Some(ref tips) = ctx.my_champion_ally_tips {
+        if !tips.is_empty() {
+            msg.push_str("Советы Riot:\n");
+            for tip in tips {
+                msg.push_str(&format!("- {}\n", tip));
+            }
+        }
+    }
+
     // Find the player's stats from my_team
     if let Some(me) = ctx.my_team.iter().find(|p| p.champion_name == ctx.my_champion) {
         if ctx.phase != "champ_select" {
@@ -126,9 +159,43 @@ fn build_user_message(ctx: &CoachingContext) -> String {
     msg
 }
 
+/// Format resource for display. "None" → "Без ресурса", others as-is with English name in parens
+fn format_resource(resource: &str) -> String {
+    match resource {
+        "None" => "Без ресурса".to_string(),
+        "Mana" => "Мана".to_string(),
+        "Energy" => "Энергия".to_string(),
+        "Fury" => "Ярость".to_string(),
+        "Shield" => "Щит".to_string(),
+        "Heat" => "Нагрев".to_string(),
+        "Flow" => "Поток".to_string(),
+        "Courage" => "Храбрость".to_string(),
+        "Blood Well" => "Без ресурса (Blood Well)".to_string(),
+        "Ferocity" => "Свирепость".to_string(),
+        "Grit" => "Стойкость".to_string(),
+        "Rage" => "Ярость".to_string(),
+        "Crimson Rush" => "Без ресурса (Crimson Rush)".to_string(),
+        "None (Costs Health)" => "Без ресурса (тратит HP)".to_string(),
+        other => format!("{} (англ.)", other),
+    }
+}
+
 fn write_player_line(msg: &mut String, p: &CoachPlayerInfo, marker: &str, is_champ_select: bool) {
     msg.push_str(&format!("- {}{} ({}) ", marker, p.champion_name,
         if p.position.is_empty() { "?" } else { &p.position }));
+
+    // Add resource and class info
+    let mut meta_parts = Vec::new();
+    if let Some(ref resource) = p.champion_resource {
+        meta_parts.push(format_resource(resource));
+    }
+    if let Some(ref class) = p.champion_class {
+        meta_parts.push(class.clone());
+    }
+    if !meta_parts.is_empty() {
+        msg.push_str(&format!("— {} ", meta_parts.join(", ")));
+    }
+
     if !p.summoner_spells.is_empty() {
         msg.push_str(&format!("— {} ", p.summoner_spells.join("/")));
     }

@@ -531,6 +531,8 @@ pub struct CoachPlayerInfo {
     pub keystone_rune: String,
     pub is_dead: bool,
     pub respawn_timer: f64,
+    pub champion_resource: Option<String>,
+    pub champion_class: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -561,6 +563,10 @@ pub struct CoachingContext {
     pub my_team: Vec<CoachPlayerInfo>,
     pub enemy_team: Vec<CoachPlayerInfo>,
     pub recent_events: Vec<String>,
+    pub my_champion_resource: Option<String>,
+    pub my_champion_class: Option<String>,
+    pub my_champion_abilities_summary: Option<String>,
+    pub my_champion_ally_tips: Option<Vec<String>>,
 }
 
 
