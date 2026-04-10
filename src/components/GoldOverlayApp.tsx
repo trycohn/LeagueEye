@@ -5,7 +5,7 @@ import { GoldLaneRow } from "./GoldLaneRow";
 import { Coins, X, Loader2 } from "lucide-react";
 import type { GoldComparisonData } from "../lib/types";
 
-const POLL_INTERVAL = 10_000;
+const POLL_INTERVAL = 4_000;
 const OVERLAY_WIDTH = 196;
 
 export function GoldOverlayApp() {
@@ -13,22 +13,55 @@ export function GoldOverlayApp() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const contentRef = useRef<HTMLDivElement>(null);
+  const mountedRef = useRef(true);
+  const dataRef = useRef<GoldComparisonData | null>(null);
+  const pollingRef = useRef(false);
+  const requestIdRef = useRef(0);
 
   const fetchData = useCallback(async () => {
+    if (!mountedRef.current || pollingRef.current) return;
+
+    pollingRef.current = true;
+    const requestId = ++requestIdRef.current;
+    const showLoading = dataRef.current === null;
+
     try {
+      if (showLoading) {
+        setLoading(true);
+      }
+
       const result = await invoke<GoldComparisonData>("get_gold_comparison");
-      setData(result);
-      setError(null);
+
+      if (mountedRef.current && requestId === requestIdRef.current) {
+        dataRef.current = result;
+        setData(result);
+        setError(null);
+      }
     } catch (e) {
-      setError(typeof e === "string" ? e : String(e));
+      if (mountedRef.current && requestId === requestIdRef.current) {
+        setError(typeof e === "string" ? e : String(e));
+      }
     } finally {
-      setLoading(false);
+      if (mountedRef.current && requestId === requestIdRef.current && showLoading) {
+        setLoading(false);
+      }
+      pollingRef.current = false;
     }
   }, []);
 
   useEffect(() => {
-    fetchData();
-    const timer = setInterval(fetchData, POLL_INTERVAL);
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    void fetchData();
+    const timer = setInterval(() => {
+      void fetchData();
+    }, POLL_INTERVAL);
     return () => clearInterval(timer);
   }, [fetchData]);
 

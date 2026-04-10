@@ -221,7 +221,7 @@ pub async fn get_live_game(
     };
 
     let gameflow_phase = lcu::get_gameflow_phase(&creds).unwrap_or_default();
-    log::info!("[live] gameflow_phase = {:?}", gameflow_phase);
+    log::debug!("[live] gameflow_phase = {:?}", gameflow_phase);
 
     let is_champ_select = gameflow_phase == "ChampSelect";
     let is_in_game = matches!(
@@ -373,10 +373,11 @@ pub async fn get_live_game(
         None
     };
 
-    // Try Live Client Data API (allgamedata has champion_name, playerlist doesn't)
+    // Reuse one allgamedata snapshot per tick to avoid duplicate live client calls.
     let mut players = Vec::new();
+    let alldata = lcu::get_live_client_allgamedata().ok();
 
-    if let Ok(alldata) = lcu::get_live_client_allgamedata() {
+    if let Some(alldata) = alldata.as_ref() {
         if let Some(all_players) = &alldata.all_players {
             let (_id_to_name, name_to_id, _meta) = get_or_fetch_champion_names(&champ_cache).await;
             let my_name = identity.as_ref().map(|id| id.game_name.clone()).unwrap_or_default();
@@ -421,7 +422,7 @@ pub async fn get_live_game(
         phase: "in_game".to_string(),
         players,
         bans: vec![],
-        game_time: lcu::get_live_client_allgamedata().ok()
+        game_time: alldata.as_ref()
             .and_then(|d| d.game_data.as_ref().and_then(|g| g.game_time.map(|t| t as i64))),
         timer: None,
         my_puuid: my_puuid.clone(),

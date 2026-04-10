@@ -99,7 +99,7 @@ Triple Vite entry points: `index.html` (main app), `overlay.html` (coach overlay
 
 - **App.tsx** — 3 views: "home", "profile", "live". Auto-switches to "live" during champ select/in-game (1.5s debounce to avoid flicker). Shows/hides overlay windows automatically
 - **hooks/useRiotApi.ts** — Profile, matches, mastery, champion stats. State machine with `genRef` (aborts stale ops), `busyRef` (prevents concurrent searches), `lastSearchRef` (caches last result)
-- **hooks/useLiveGame.ts** — Adaptive polling: 3s (champ select), 15s (in-game), 8s (idle)
+- **hooks/useLiveGame.ts** — Adaptive polling: 2s (champ select), 5s (in-game), 3s (idle)
 - **hooks/useAiCoach.ts** — Module-level persistent state (survives remount). Single global listener for `coach-stream` Tauri event. Accumulates streaming text into messages
 - **hooks/useChampionNames.ts** — DDragon champion ID-to-name cache
 - **lib/types.ts** — TypeScript interfaces mirroring `shared/src/models.rs` (camelCase)

@@ -2,39 +2,83 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { LiveGameData } from "../lib/types";
 
-const CHAMP_SELECT_INTERVAL = 3_000;
-const IN_GAME_INTERVAL = 15_000;
-const IDLE_INTERVAL = 8_000;
+const CHAMP_SELECT_INTERVAL = 2_000;
+const IN_GAME_INTERVAL = 5_000;
+const IDLE_INTERVAL = 3_000;
 
 export function useLiveGame(enabled: boolean) {
   const [liveData, setLiveData] = useState<LiveGameData | null>(null);
   const [loading, setLoading] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
+  const enabledRef = useRef(enabled);
+  const liveDataRef = useRef<LiveGameData | null>(null);
+  const pollingRef = useRef(false);
+  const requestIdRef = useRef(0);
 
   const phase = liveData?.phase ?? "none";
 
   const poll = useCallback(async () => {
-    if (!enabled || !mountedRef.current) return;
+    if (!enabledRef.current || !mountedRef.current || pollingRef.current) return;
+
+    pollingRef.current = true;
+    const requestId = ++requestIdRef.current;
+    const showLoading = liveDataRef.current === null;
+
     try {
-      setLoading(true);
+      if (showLoading) {
+        setLoading(true);
+      }
+
       const data = await invoke<LiveGameData>("get_live_game");
-      if (mountedRef.current) setLiveData(data);
+
+      if (
+        mountedRef.current &&
+        enabledRef.current &&
+        requestId === requestIdRef.current
+      ) {
+        liveDataRef.current = data;
+        setLiveData(data);
+      }
     } catch {
-      if (mountedRef.current) setLiveData(null);
+      if (
+        mountedRef.current &&
+        enabledRef.current &&
+        requestId === requestIdRef.current &&
+        liveDataRef.current === null
+      ) {
+        setLiveData(null);
+      }
     } finally {
-      if (mountedRef.current) setLoading(false);
+      if (mountedRef.current && requestId === requestIdRef.current && showLoading) {
+        setLoading(false);
+      }
+      pollingRef.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    enabledRef.current = enabled;
+
+    if (!enabled) {
+      requestIdRef.current += 1;
+      liveDataRef.current = null;
+      setLiveData(null);
+      setLoading(false);
+      return;
     }
   }, [enabled]);
 
   useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
-
-  useEffect(() => {
     if (!enabled) {
-      setLiveData(null);
       return;
     }
 
@@ -47,11 +91,17 @@ export function useLiveGame(enabled: boolean) {
       interval = IDLE_INTERVAL;
     }
 
-    poll();
+    void poll();
 
-    timerRef.current = setInterval(poll, interval);
+    timerRef.current = setInterval(() => {
+      void poll();
+    }, interval);
+
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
     };
   }, [enabled, phase, poll]);
 
