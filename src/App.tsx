@@ -10,6 +10,7 @@ import { AccountBadge } from "./components/AccountBadge";
 import { LiveGameView } from "./components/LiveGameView";
 import { useRiotApi } from "./hooks/useRiotApi";
 import { useLiveGame } from "./hooks/useLiveGame";
+import { useOverlayLifecycle } from "./hooks/useOverlayLifecycle";
 import { HomeView } from "./components/HomeView";
 import { Eye, AlertCircle, Loader2, ChevronLeft, FlaskConical } from "lucide-react";
 import type { DetectedAccount } from "./lib/types";
@@ -44,15 +45,17 @@ export default function App() {
     useState<DetectedAccount | null>(null);
   const [clientOnline, setClientOnline] = useState(false);
   const [leagueWindowVisible, setLeagueWindowVisible] = useState(false);
-  const [liveOverlayAllowed, setLiveOverlayAllowed] = useState(false);
+  const [overlayRetryNonce, setOverlayRetryNonce] = useState(0);
   const [showAiTest, setShowAiTest] = useState(false); // TEST: удалить после тестирования
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { liveData, phase } = useLiveGame(clientOnline);
+  const overlayEligible = useOverlayLifecycle(clientOnline);
   const isLive = phase === "champ_select" || phase === "in_game";
 
   // Автопереключение на live view + отдельная политика видимости оверлея.
   const overlayShownRef = useRef(false);
+  const overlayRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const leaveLiveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -62,7 +65,6 @@ export default function App() {
         clearTimeout(leaveLiveTimerRef.current);
         leaveLiveTimerRef.current = null;
       }
-      setLiveOverlayAllowed(true);
       if (view !== "live") {
         setPrevView(view);
         setView("live");
@@ -72,21 +74,47 @@ export default function App() {
       leaveLiveTimerRef.current = setTimeout(() => {
         leaveLiveTimerRef.current = null;
         setView(prevView);
-        setLiveOverlayAllowed(false);
       }, 1500);
-    } else {
-      setLiveOverlayAllowed(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
   useEffect(() => {
-    const shouldShowOverlay = liveOverlayAllowed && leagueWindowVisible;
+    const shouldShowOverlay = overlayEligible && leagueWindowVisible;
+    let cancelled = false;
+
     if (shouldShowOverlay && !overlayShownRef.current) {
-      overlayShownRef.current = true;
-      invoke("show_overlay").catch(() => {});
-      invoke("show_gold_overlay").catch(() => {});
-      return;
+      if (overlayRetryTimerRef.current) {
+        clearTimeout(overlayRetryTimerRef.current);
+        overlayRetryTimerRef.current = null;
+      }
+
+      const showOverlays = async () => {
+        const [overlayShown, goldOverlayShown] = await Promise.all([
+          invoke<boolean>("show_overlay").catch(() => false),
+          invoke<boolean>("show_gold_overlay").catch(() => false),
+        ]);
+
+        if (cancelled) return;
+
+        overlayShownRef.current = overlayShown || goldOverlayShown;
+        if (!overlayShownRef.current && !overlayRetryTimerRef.current) {
+          overlayRetryTimerRef.current = setTimeout(() => {
+            overlayRetryTimerRef.current = null;
+            setOverlayRetryNonce((nonce) => nonce + 1);
+          }, 250);
+        }
+      };
+
+      void showOverlays();
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (overlayRetryTimerRef.current) {
+      clearTimeout(overlayRetryTimerRef.current);
+      overlayRetryTimerRef.current = null;
     }
 
     if (!shouldShowOverlay) {
@@ -94,7 +122,10 @@ export default function App() {
       invoke("hide_overlay").catch(() => {});
       invoke("hide_gold_overlay").catch(() => {});
     }
-  }, [leagueWindowVisible, liveOverlayAllowed]);
+    return () => {
+      cancelled = true;
+    };
+  }, [leagueWindowVisible, overlayEligible, overlayRetryNonce]);
 
   useEffect(() => {
     let mounted = true;
@@ -126,7 +157,6 @@ export default function App() {
     if (view === "live" || !leaveLiveTimerRef.current) return;
     clearTimeout(leaveLiveTimerRef.current);
     leaveLiveTimerRef.current = null;
-    setLiveOverlayAllowed(false);
   }, [view]);
 
   useEffect(() => {
@@ -149,6 +179,10 @@ export default function App() {
 
   useEffect(() => {
     return () => {
+      if (overlayRetryTimerRef.current) {
+        clearTimeout(overlayRetryTimerRef.current);
+        overlayRetryTimerRef.current = null;
+      }
       if (leaveLiveTimerRef.current) {
         clearTimeout(leaveLiveTimerRef.current);
         leaveLiveTimerRef.current = null;

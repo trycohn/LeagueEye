@@ -5,6 +5,7 @@ mod db;
 mod league_window;
 mod lcu;
 mod models;
+mod overlay_policy;
 
 use ai_coach::CoachState;
 use api_client::ServerApiClient;
@@ -63,14 +64,47 @@ fn create_gold_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-async fn show_overlay(app: tauri::AppHandle) -> Result<(), String> {
-    if !league_window::current_visibility() {
-        hide_overlay(app).await?;
-        return Ok(());
+fn hide_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("overlay") {
+        win.hide().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn hide_gold_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("gold-overlay") {
+        win.hide().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn overlay_windows_allowed() -> bool {
+    overlay_policy::current_overlay_eligibility() && league_window::current_visibility()
+}
+
+fn show_overlay_window_if_allowed(app: &tauri::AppHandle) -> Result<bool, String> {
+    if !overlay_windows_allowed() {
+        hide_overlay_window(app)?;
+        return Ok(false);
     }
 
-    create_overlay_window(&app)
+    create_overlay_window(app)?;
+    Ok(true)
+}
+
+fn show_gold_overlay_window_if_allowed(app: &tauri::AppHandle) -> Result<bool, String> {
+    if !overlay_windows_allowed() {
+        hide_gold_overlay_window(app)?;
+        return Ok(false);
+    }
+
+    create_gold_overlay_window(app)?;
+    Ok(true)
+}
+
+#[tauri::command]
+async fn show_overlay(app: tauri::AppHandle) -> Result<bool, String> {
+    show_overlay_window_if_allowed(&app)
 }
 
 #[tauri::command]
@@ -80,10 +114,7 @@ async fn get_league_window_visibility() -> Result<bool, String> {
 
 #[tauri::command]
 async fn hide_overlay(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window("overlay") {
-        win.hide().map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    hide_overlay_window(&app)
 }
 
 #[tauri::command]
@@ -98,21 +129,13 @@ async fn resize_overlay(app: tauri::AppHandle, width: f64, height: f64) -> Resul
 }
 
 #[tauri::command]
-async fn show_gold_overlay(app: tauri::AppHandle) -> Result<(), String> {
-    if !league_window::current_visibility() {
-        hide_gold_overlay(app).await?;
-        return Ok(());
-    }
-
-    create_gold_overlay_window(&app)
+async fn show_gold_overlay(app: tauri::AppHandle) -> Result<bool, String> {
+    show_gold_overlay_window_if_allowed(&app)
 }
 
 #[tauri::command]
 async fn hide_gold_overlay(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window("gold-overlay") {
-        win.hide().map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    hide_gold_overlay_window(&app)
 }
 
 #[tauri::command]
@@ -182,9 +205,11 @@ mod keyboard_hook {
                             return unsafe { CallNextHookEx(0, code, wparam, lparam) };
                         }
                         log::info!("[hook] Shift+E detected via low-level hook");
-                        let _ = super::create_overlay_window(app);
-                        let _ = super::create_gold_overlay_window(app);
-                        let _ = app.emit("hotkey-coach-trigger", ());
+                        let overlay_shown = super::show_overlay_window_if_allowed(app).unwrap_or(false);
+                        if overlay_shown {
+                            let _ = super::show_gold_overlay_window_if_allowed(app);
+                            let _ = app.emit("hotkey-coach-trigger", ());
+                        }
                     }
                 }
             }
@@ -322,6 +347,7 @@ pub fn run() {
             commands::get_champion_stats,
             commands::detect_account,
             commands::poll_client_status,
+            commands::get_overlay_eligibility,
             commands::get_cached_profile,
             commands::get_live_game,
             commands::load_more_matches,

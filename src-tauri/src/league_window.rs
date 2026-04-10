@@ -61,10 +61,9 @@ fn refresh_fullscreen_overlay_blocked() -> bool {
     #[cfg(target_os = "windows")]
     let blocked = if crate::lcu::is_game_fullscreen_mode() {
         if let Some(creds) = crate::lcu::detect_lcu_credentials() {
-            matches!(
-                crate::lcu::get_gameflow_phase(&creds).as_deref(),
-                Ok("GameStart") | Ok("InProgress") | Ok("Reconnect")
-            )
+            crate::lcu::get_gameflow_phase(&creds)
+                .map(|phase| crate::overlay_policy::allows_overlay_for_phase(&phase))
+                .unwrap_or(false)
         } else {
             false
         }

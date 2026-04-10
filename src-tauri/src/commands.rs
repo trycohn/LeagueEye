@@ -103,7 +103,18 @@ pub async fn detect_account(
 
 #[tauri::command]
 pub async fn poll_client_status() -> bool {
-    lcu::is_lcu_running()
+    let running = lcu::is_lcu_running();
+    if !running {
+        crate::keyboard_hook::set_game_active(false);
+    }
+    running
+}
+
+#[tauri::command]
+pub fn get_overlay_eligibility() -> bool {
+    let eligible = crate::overlay_policy::current_overlay_eligibility();
+    crate::keyboard_hook::set_game_active(eligible);
+    eligible
 }
 
 // ─── get_cached_profile ───────────────────────────────────────────────────────
@@ -217,9 +228,6 @@ pub async fn get_live_game(
         gameflow_phase.as_str(),
         "InProgress" | "GameStart" | "Reconnect"
     );
-
-    // Update keyboard hook: Shift+E only works during champ select or in-game
-    crate::keyboard_hook::set_game_active(is_champ_select || is_in_game);
 
     // ── 1. Champ Select ─────────────────────────────────────────────────────
     if is_champ_select {
