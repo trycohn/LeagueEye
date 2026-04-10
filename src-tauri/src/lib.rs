@@ -23,6 +23,7 @@ pub type SharedDb = Arc<Mutex<Db>>;
 fn create_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("overlay") {
         let _ = win.show();
+        sync_overlay_interactivity(app)?;
         return Ok(());
     }
 
@@ -39,12 +40,14 @@ fn create_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
         .build()
         .map_err(|e| format!("Failed to create overlay: {}", e))?;
 
+    sync_overlay_interactivity(app)?;
     Ok(())
 }
 
 fn create_gold_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("gold-overlay") {
         let _ = win.show();
+        sync_overlay_interactivity(app)?;
         return Ok(());
     }
 
@@ -61,6 +64,7 @@ fn create_gold_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
         .build()
         .map_err(|e| format!("Failed to create gold overlay: {}", e))?;
 
+    sync_overlay_interactivity(app)?;
     Ok(())
 }
 
@@ -75,6 +79,25 @@ fn hide_gold_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("gold-overlay") {
         win.hide().map_err(|e| e.to_string())?;
     }
+    Ok(())
+}
+
+fn set_overlay_click_through(
+    app: &tauri::AppHandle,
+    label: &str,
+    click_through: bool,
+) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window(label) {
+        win.set_ignore_cursor_events(click_through)
+            .map_err(|e| format!("Failed to update {label} click-through mode: {e}"))?;
+    }
+    Ok(())
+}
+
+fn sync_overlay_interactivity(app: &tauri::AppHandle) -> Result<(), String> {
+    let click_through = !keyboard_hook::refresh_shift_state();
+    set_overlay_click_through(app, "overlay", click_through)?;
+    set_overlay_click_through(app, "gold-overlay", click_through)?;
     Ok(())
 }
 
@@ -159,9 +182,11 @@ mod keyboard_hook {
 
     static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
     pub static IS_IN_GAME: AtomicBool = AtomicBool::new(false);
+    static SHIFT_HELD: AtomicBool = AtomicBool::new(false);
 
     const VK_E: i32 = 0x45;
-    const VK_SHIFT: i32 = 0xA0;
+    const VK_SHIFT: u32 = 0x10;
+    const VK_LSHIFT: i32 = 0xA0;
     const VK_RSHIFT: i32 = 0xA1;
 
     #[allow(non_snake_case)]
@@ -182,6 +207,7 @@ mod keyboard_hook {
 
     const WH_KEYBOARD_LL: i32 = 13;
     const WM_KEYDOWN: usize = 0x0100;
+    const WM_KEYUP: usize = 0x0101;
     const HC_ACTION: i32 = 0;
 
     extern "system" {
@@ -191,13 +217,41 @@ mod keyboard_hook {
         fn GetModuleHandleW(lpModuleName: *const u16) -> isize;
     }
 
+    fn current_shift_state() -> bool {
+        unsafe { GetAsyncKeyState(VK_LSHIFT) < 0 || GetAsyncKeyState(VK_RSHIFT) < 0 }
+    }
+
+    pub fn refresh_shift_state() -> bool {
+        let shift_held = current_shift_state();
+        SHIFT_HELD.store(shift_held, Ordering::Relaxed);
+        shift_held
+    }
+
+    fn sync_shift_state(app: Option<&AppHandle>) -> bool {
+        let previous = SHIFT_HELD.load(Ordering::Relaxed);
+        let shift_held = refresh_shift_state();
+        if previous != shift_held {
+            if let Some(app) = app {
+                let _ = super::sync_overlay_interactivity(app);
+            }
+        }
+        shift_held
+    }
+
+    fn is_shift_key(vk_code: u32) -> bool {
+        vk_code == VK_SHIFT || vk_code == VK_LSHIFT as u32 || vk_code == VK_RSHIFT as u32
+    }
+
     unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-        if code == HC_ACTION && wparam == WM_KEYDOWN {
+        if code == HC_ACTION && (wparam == WM_KEYDOWN || wparam == WM_KEYUP) {
             let kb = &*(lparam as *const KBDLLHOOKSTRUCT);
-            if kb.vkCode == VK_E as u32 && IS_IN_GAME.load(Ordering::Relaxed) {
-                let shift_held = unsafe {
-                    GetAsyncKeyState(VK_SHIFT) < 0 || GetAsyncKeyState(VK_RSHIFT) < 0
-                };
+
+            if is_shift_key(kb.vkCode) {
+                sync_shift_state(APP_HANDLE.get());
+            }
+
+            if wparam == WM_KEYDOWN && kb.vkCode == VK_E as u32 && IS_IN_GAME.load(Ordering::Relaxed) {
+                let shift_held = sync_shift_state(APP_HANDLE.get());
                 if shift_held {
                     if let Some(app) = APP_HANDLE.get() {
                         if !super::league_window::current_visibility() {
@@ -220,7 +274,6 @@ mod keyboard_hook {
     pub fn set_game_active(active: bool) {
         IS_IN_GAME.store(active, Ordering::Relaxed);
     }
-
     pub fn install(app: AppHandle) {
         let _ = APP_HANDLE.set(app);
         std::thread::spawn(|| {
@@ -264,6 +317,9 @@ mod keyboard_hook {
         log::warn!("[hook] Keyboard hook not supported on this platform");
     }
     pub fn set_game_active(_active: bool) {}
+    pub fn refresh_shift_state() -> bool {
+        false
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

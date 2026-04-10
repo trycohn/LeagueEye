@@ -40,10 +40,10 @@ export function OverlayApp() {
   const latestMessage = messages.length > 0 ? messages[messages.length - 1] : null;
 
   function handleMouseDown(e: React.MouseEvent) {
-    if (e.shiftKey) {
-      e.preventDefault();
-      getCurrentWindow().startDragging();
-    }
+    const target = e.target as HTMLElement;
+    if (!e.shiftKey || target.closest("button")) return;
+    e.preventDefault();
+    void getCurrentWindow().startDragging();
   }
 
   function handleClose() {

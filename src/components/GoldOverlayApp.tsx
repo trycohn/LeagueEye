@@ -82,9 +82,10 @@ export function GoldOverlayApp() {
   }, [data, error, loading, updateSize]);
 
   function handleMouseDown(e: React.MouseEvent) {
-    if (!e.shiftKey) return;
+    const target = e.target as HTMLElement;
+    if (!e.shiftKey || target.closest("button")) return;
     e.preventDefault();
-    getCurrentWindow().startDragging();
+    void getCurrentWindow().startDragging();
   }
 
   function handleClose() {
