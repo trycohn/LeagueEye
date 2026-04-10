@@ -13,8 +13,77 @@ use crate::{AiCoachProvider, AppState};
 
 // ─── System prompt ──────────────────────────────────────────────────────────
 
-fn build_system_prompt(phase: &str) -> String {
-    if phase == "champ_select" {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MatchStage {
+    Early,
+    Mid,
+    Late,
+}
+
+const UNKNOWN_STAGE_LABEL_PROMPT: &str = "неизвестная";
+const UNKNOWN_STAGE_LABEL_MESSAGE: &str = "неизвестна";
+const UNKNOWN_STAGE_FOCUS: &str =
+    "оцени текущее состояние игры по KDA, золоту, предметам, событиям и позициям";
+const UNKNOWN_STAGE_ANTI_REPEAT_RULE: &str =
+    "Не повторяй один и тот же шаблонный совет без новой причины из данных";
+
+fn normalized_game_time_secs(game_time_secs: Option<i64>) -> Option<i64> {
+    game_time_secs.filter(|secs| *secs >= 0)
+}
+
+fn format_game_time(game_time_secs: Option<i64>) -> String {
+    normalized_game_time_secs(game_time_secs)
+        .map(|t| format!("{}:{:02}", t / 60, t % 60))
+        .unwrap_or_else(|| "?".to_string())
+}
+
+impl MatchStage {
+    fn from_game_time_secs(game_time_secs: Option<i64>) -> Option<Self> {
+        let secs = normalized_game_time_secs(game_time_secs)?;
+        if secs < 15 * 60 {
+            Some(Self::Early)
+        } else if secs < 30 * 60 {
+            Some(Self::Mid)
+        } else {
+            Some(Self::Late)
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Early => "ранняя (early game)",
+            Self::Mid => "средняя (mid game)",
+            Self::Late => "поздняя (late game)",
+        }
+    }
+
+    fn focus_summary(self) -> &'static str {
+        match self {
+            Self::Early => "линия, фарм, трейды, контроль волны, безопасные окна",
+            Self::Mid => "роумы, objectives, передвижение по карте, сайдлейны",
+            Self::Late => {
+                "тимфайты, позиционка, Baron / Dragon Soul / Elder, игра от ключевых кулдаунов и ошибок"
+            }
+        }
+    }
+
+    fn anti_repeat_rule(self) -> &'static str {
+        match self {
+            Self::Early => {
+                "Не повторяй две одинаковые раннегеймовые мысли разными словами"
+            }
+            Self::Mid => {
+                "Не зацикливайся на шаблонных раннегеймовых советах про линию, фарм и башню, если данные не требуют этого прямо сейчас"
+            }
+            Self::Late => {
+                "Не возвращайся к шаблонным раннегеймовым советам про линию и фарм, если данные не требуют этого прямо сейчас"
+            }
+        }
+    }
+}
+
+fn build_system_prompt(ctx: &CoachingContext) -> String {
+    if ctx.phase == "champ_select" {
         return r#"Ты — AI-тренер по League of Legends. Анализируй драфт и давай рекомендации.
 
 Структура данных:
@@ -33,7 +102,18 @@ fn build_system_prompt(phase: &str) -> String {
 - НИКАКОГО текста кроме двух строк с советами"#.to_string();
     }
 
-    r#"Ты — AI-тренер по League of Legends. Анализируй текущее состояние игры и давай рекомендации.
+    let stage = MatchStage::from_game_time_secs(ctx.game_time_secs);
+    let stage_label = stage
+        .map(MatchStage::label)
+        .unwrap_or(UNKNOWN_STAGE_LABEL_PROMPT);
+    let stage_focus = stage
+        .map(MatchStage::focus_summary)
+        .unwrap_or(UNKNOWN_STAGE_FOCUS);
+    let anti_repeat_rule = stage
+        .map(MatchStage::anti_repeat_rule)
+        .unwrap_or(UNKNOWN_STAGE_ANTI_REPEAT_RULE);
+
+    format!(r#"Ты — AI-тренер по League of Legends. Анализируй текущее состояние игры и давай рекомендации.
 
 Структура данных:
 - Блок «=== Я (игрок) ===» — это твой подопечный. Его статы (KDA, CS, золото, предметы) указаны в этом блоке — ИСПОЛЬЗУЙ ИХ
@@ -45,12 +125,15 @@ fn build_system_prompt(phase: &str) -> String {
 - Отвечай ТОЛЬКО на русском языке
 - ФОРМАТ ОТВЕТА: РОВНО 2 строки, каждая начинается с «- » (дефис + пробел). НИЧЕГО больше — никаких заголовков, секций, вступлений, заключений, пояснений, цитат, выделений, приоритетов, анализов
 - Каждый совет — максимум 15 слов. Коротко и по делу
-- Фокусируйся на самом важном прямо сейчас: KDA, CS, золото, предметы, время игры
+- Фокусируйся на самом важном прямо сейчас: KDA, CS, золото, предметы, время игры, стадия матча
+- Стадия матча сейчас: {stage_label}
+- Приоритет этой стадии: {stage_focus}
+- {anti_repeat_rule}
 - Советуй конкретно: "Иди на дракона", "Фарми", "Сплитпушь топ", "Не дерись"
 - Называй чемпионов по ПОЛНЫМ именам (Мордекайзер, Мисс Фортуна, Чо'Гат)
 - НЕ пиши названия умений — используй ТОЛЬКО (Q), (W), (E), (R), (Пассивное)
 - НЕ предполагай что у чемпиона мана — ресурс указан в данных
-- НИКАКОГО текста кроме двух строк с советами"#.to_string()
+- НИКАКОГО текста кроме двух строк с советами"#)
 }
 
 // ─── Build user message ─────────────────────────────────────────────────────
@@ -61,10 +144,15 @@ fn build_user_message(ctx: &CoachingContext) -> String {
     if ctx.phase == "champ_select" {
         msg.push_str("Фаза: Выбор чемпионов\n");
     } else {
-        let time_str = ctx.game_time_secs
-            .map(|t| format!("{}:{:02}", t / 60, t % 60))
-            .unwrap_or_else(|| "?".to_string());
+        let time_str = format_game_time(ctx.game_time_secs);
         msg.push_str(&format!("Фаза: В игре ({})\n", time_str));
+        if let Some(stage) = MatchStage::from_game_time_secs(ctx.game_time_secs) {
+            msg.push_str(&format!("Стадия матча: {}\n", stage.label()));
+            msg.push_str(&format!("Фокус стадии: {}\n", stage.focus_summary()));
+        } else {
+            msg.push_str(&format!("Стадия матча: {}\n", UNKNOWN_STAGE_LABEL_MESSAGE));
+            msg.push_str(&format!("Фокус стадии: {}\n", UNKNOWN_STAGE_FOCUS));
+        }
     }
 
     // Dedicated block for the player being coached
@@ -228,7 +316,7 @@ pub async fn stream_coach(
     Json(ctx): Json<CoachingContext>,
 ) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
     let config = state.ai_coach_config.clone();
-    let system_prompt = build_system_prompt(&ctx.phase);
+    let system_prompt = build_system_prompt(&ctx);
     let user_message = build_user_message(&ctx);
 
     log::info!("[coach] === SYSTEM PROMPT ===\n{}\n=========================", system_prompt);
@@ -645,5 +733,119 @@ fn make_openai_compatible_stream(
                 text: None,
             }).unwrap()
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_player(champion_name: &str, position: &str) -> CoachPlayerInfo {
+        CoachPlayerInfo {
+            champion_name: champion_name.to_string(),
+            position: position.to_string(),
+            rank_display: "Gold I".to_string(),
+            kills: 3,
+            deaths: 1,
+            assists: 4,
+            cs: 156,
+            level: 12,
+            items: vec!["Lost Chapter".to_string()],
+            summoner_spells: vec!["Flash".to_string(), "Ignite".to_string()],
+            keystone_rune: "Electrocute".to_string(),
+            is_dead: false,
+            respawn_timer: 0.0,
+            champion_resource: Some("Mana".to_string()),
+            champion_class: Some("Mage".to_string()),
+        }
+    }
+
+    fn sample_context(game_time_secs: Option<i64>) -> CoachingContext {
+        CoachingContext {
+            phase: "in_game".to_string(),
+            game_time_secs,
+            my_champion: "Ahri".to_string(),
+            my_position: "MIDDLE".to_string(),
+            my_gold: Some(1250.0),
+            my_summoner_spells: vec!["Flash".to_string(), "Ignite".to_string()],
+            my_runes: Some("Electrocute (Domination / Sorcery)".to_string()),
+            my_stats: None,
+            my_team: vec![sample_player("Ahri", "MIDDLE")],
+            enemy_team: vec![sample_player("Zed", "MIDDLE")],
+            recent_events: vec![],
+            my_champion_resource: Some("Mana".to_string()),
+            my_champion_class: Some("Mage".to_string()),
+            my_champion_abilities_summary: None,
+            my_champion_ally_tips: None,
+        }
+    }
+
+    #[test]
+    fn match_stage_uses_expected_thresholds() {
+        assert_eq!(MatchStage::from_game_time_secs(None), None);
+        assert_eq!(MatchStage::from_game_time_secs(Some(-1)), None);
+        assert_eq!(MatchStage::from_game_time_secs(Some(0)), Some(MatchStage::Early));
+        assert_eq!(MatchStage::from_game_time_secs(Some(14 * 60 + 59)), Some(MatchStage::Early));
+        assert_eq!(MatchStage::from_game_time_secs(Some(15 * 60)), Some(MatchStage::Mid));
+        assert_eq!(MatchStage::from_game_time_secs(Some(29 * 60 + 59)), Some(MatchStage::Mid));
+        assert_eq!(MatchStage::from_game_time_secs(Some(30 * 60)), Some(MatchStage::Late));
+    }
+
+    #[test]
+    fn user_message_includes_match_stage_and_focus() {
+        let message = build_user_message(&sample_context(Some(20 * 60)));
+
+        assert!(message.contains("Фаза: В игре (20:00)"));
+        assert!(message.contains("Стадия матча: средняя (mid game)"));
+        assert!(message.contains("Фокус стадии: роумы, objectives, передвижение по карте, сайдлейны"));
+    }
+
+    #[test]
+    fn user_message_uses_unknown_stage_fallback_when_time_missing() {
+        let message = build_user_message(&sample_context(None));
+
+        assert!(message.contains("Фаза: В игре (?)"));
+        assert!(message.contains("Стадия матча: неизвестна"));
+        assert!(message.contains(
+            "Фокус стадии: оцени текущее состояние игры по KDA, золоту, предметам, событиям и позициям"
+        ));
+    }
+
+    #[test]
+    fn system_prompt_uses_stage_specific_focus_and_anti_repeat_rule() {
+        let prompt = build_system_prompt(&sample_context(Some(31 * 60)));
+
+        assert!(prompt.contains("Стадия матча сейчас: поздняя (late game)"));
+        assert!(prompt.contains(
+            "Приоритет этой стадии: тимфайты, позиционка, Baron / Dragon Soul / Elder, игра от ключевых кулдаунов и ошибок"
+        ));
+        assert!(prompt.contains(
+            "Не возвращайся к шаблонным раннегеймовым советам про линию и фарм"
+        ));
+    }
+
+    #[test]
+    fn system_prompt_uses_neutral_fallback_when_stage_unknown() {
+        let prompt = build_system_prompt(&sample_context(None));
+
+        assert!(prompt.contains("Стадия матча сейчас: неизвестная"));
+        assert!(prompt.contains(
+            "Приоритет этой стадии: оцени текущее состояние игры по KDA, золоту, предметам, событиям и позициям"
+        ));
+        assert!(prompt.contains(
+            "Не повторяй один и тот же шаблонный совет без новой причины из данных"
+        ));
+    }
+
+    #[test]
+    fn champ_select_prompt_does_not_include_match_stage_rules() {
+        let mut ctx = sample_context(Some(20 * 60));
+        ctx.phase = "champ_select".to_string();
+
+        let prompt = build_system_prompt(&ctx);
+
+        assert!(prompt.contains("Анализируй драфт и давай рекомендации"));
+        assert!(!prompt.contains("Стадия матча сейчас:"));
+        assert!(!prompt.contains("{stage_label}"));
     }
 }

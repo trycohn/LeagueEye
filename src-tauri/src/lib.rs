@@ -88,17 +88,23 @@ fn set_overlay_click_through(
     click_through: bool,
 ) -> Result<(), String> {
     if let Some(win) = app.get_webview_window(label) {
+        win.set_focusable(!click_through)
+            .map_err(|e| format!("Failed to update {label} focus mode: {e}"))?;
         win.set_ignore_cursor_events(click_through)
             .map_err(|e| format!("Failed to update {label} click-through mode: {e}"))?;
     }
     Ok(())
 }
 
-fn sync_overlay_interactivity(app: &tauri::AppHandle) -> Result<(), String> {
-    let click_through = !keyboard_hook::refresh_shift_state();
+fn apply_overlay_interactivity(app: &tauri::AppHandle, shift_held: bool) -> Result<(), String> {
+    let click_through = !shift_held;
     set_overlay_click_through(app, "overlay", click_through)?;
     set_overlay_click_through(app, "gold-overlay", click_through)?;
     Ok(())
+}
+
+fn sync_overlay_interactivity(app: &tauri::AppHandle) -> Result<(), String> {
+    apply_overlay_interactivity(app, keyboard_hook::refresh_shift_state())
 }
 
 fn overlay_windows_allowed() -> bool {
@@ -182,12 +188,15 @@ mod keyboard_hook {
 
     static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
     pub static IS_IN_GAME: AtomicBool = AtomicBool::new(false);
-    static SHIFT_HELD: AtomicBool = AtomicBool::new(false);
+    static LEFT_SHIFT_HELD: AtomicBool = AtomicBool::new(false);
+    static RIGHT_SHIFT_HELD: AtomicBool = AtomicBool::new(false);
 
     const VK_E: i32 = 0x45;
     const VK_SHIFT: u32 = 0x10;
     const VK_LSHIFT: i32 = 0xA0;
     const VK_RSHIFT: i32 = 0xA1;
+    const SHIFT_SCANCODE_LEFT: u32 = 0x2A;
+    const SHIFT_SCANCODE_RIGHT: u32 = 0x36;
 
     #[allow(non_snake_case)]
     #[repr(C)]
@@ -217,23 +226,56 @@ mod keyboard_hook {
         fn GetModuleHandleW(lpModuleName: *const u16) -> isize;
     }
 
-    fn current_shift_state() -> bool {
-        unsafe { GetAsyncKeyState(VK_LSHIFT) < 0 || GetAsyncKeyState(VK_RSHIFT) < 0 }
+    fn cached_shift_state() -> bool {
+        LEFT_SHIFT_HELD.load(Ordering::Relaxed) || RIGHT_SHIFT_HELD.load(Ordering::Relaxed)
     }
 
     pub fn refresh_shift_state() -> bool {
-        let shift_held = current_shift_state();
-        SHIFT_HELD.store(shift_held, Ordering::Relaxed);
+        let left_shift_held = unsafe { GetAsyncKeyState(VK_LSHIFT) < 0 };
+        let right_shift_held = unsafe { GetAsyncKeyState(VK_RSHIFT) < 0 };
+        LEFT_SHIFT_HELD.store(left_shift_held, Ordering::Relaxed);
+        RIGHT_SHIFT_HELD.store(right_shift_held, Ordering::Relaxed);
+        left_shift_held || right_shift_held
+    }
+
+    fn apply_shift_event(kb: &KBDLLHOOKSTRUCT, shift_held: bool) -> bool {
+        match kb.vkCode {
+            code if code == VK_LSHIFT as u32 => {
+                LEFT_SHIFT_HELD.store(shift_held, Ordering::Relaxed);
+            }
+            code if code == VK_RSHIFT as u32 => {
+                RIGHT_SHIFT_HELD.store(shift_held, Ordering::Relaxed);
+            }
+            code if code == VK_SHIFT => match kb.scanCode {
+                SHIFT_SCANCODE_LEFT => LEFT_SHIFT_HELD.store(shift_held, Ordering::Relaxed),
+                SHIFT_SCANCODE_RIGHT => RIGHT_SHIFT_HELD.store(shift_held, Ordering::Relaxed),
+                _ => {
+                    LEFT_SHIFT_HELD.store(shift_held, Ordering::Relaxed);
+                    RIGHT_SHIFT_HELD.store(shift_held, Ordering::Relaxed);
+                }
+            },
+            _ => {}
+        }
+
+        cached_shift_state()
+    }
+
+    fn sync_shift_state_from_event(
+        kb: &KBDLLHOOKSTRUCT,
+        is_key_down: bool,
+        app: Option<&AppHandle>,
+    ) -> bool {
+        let shift_held = apply_shift_event(kb, is_key_down);
+        if let Some(app) = app {
+            let _ = super::apply_overlay_interactivity(app, shift_held);
+        }
         shift_held
     }
 
-    fn sync_shift_state(app: Option<&AppHandle>) -> bool {
-        let previous = SHIFT_HELD.load(Ordering::Relaxed);
+    fn sync_shift_state_from_keyboard(app: Option<&AppHandle>) -> bool {
         let shift_held = refresh_shift_state();
-        if previous != shift_held {
-            if let Some(app) = app {
-                let _ = super::sync_overlay_interactivity(app);
-            }
+        if let Some(app) = app {
+            let _ = super::apply_overlay_interactivity(app, shift_held);
         }
         shift_held
     }
@@ -247,11 +289,11 @@ mod keyboard_hook {
             let kb = &*(lparam as *const KBDLLHOOKSTRUCT);
 
             if is_shift_key(kb.vkCode) {
-                sync_shift_state(APP_HANDLE.get());
+                sync_shift_state_from_event(kb, wparam == WM_KEYDOWN, APP_HANDLE.get());
             }
 
             if wparam == WM_KEYDOWN && kb.vkCode == VK_E as u32 && IS_IN_GAME.load(Ordering::Relaxed) {
-                let shift_held = sync_shift_state(APP_HANDLE.get());
+                let shift_held = sync_shift_state_from_keyboard(APP_HANDLE.get());
                 if shift_held {
                     if let Some(app) = APP_HANDLE.get() {
                         if !super::league_window::current_visibility() {
@@ -306,6 +348,13 @@ mod keyboard_hook {
                     TranslateMessage(&msg);
                     DispatchMessageW(&msg);
                 }
+            }
+        });
+
+        std::thread::spawn(|| loop {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            if let Some(app) = APP_HANDLE.get() {
+                let _ = super::sync_overlay_interactivity(app);
             }
         });
     }
