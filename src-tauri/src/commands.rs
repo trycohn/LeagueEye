@@ -133,7 +133,7 @@ pub async fn get_cached_profile(
                 tag_line: acc.tag_line,
                 profile_icon_id: acc.profile_icon_id,
                 summoner_level: acc.summoner_level,
-                ranked: vec![], // Ranks will be fetched from server when profile loads
+                ranked: vec![], // Rank is refreshed from the server when opening the profile
             }))
         }
         None => Ok(None),

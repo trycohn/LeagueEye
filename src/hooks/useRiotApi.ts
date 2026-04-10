@@ -26,6 +26,16 @@ export function useRiotApi() {
   const [error, setError] = useState<string | null>(null);
   const genRef = useRef(0);
   const busyRef = useRef(false);
+  const resetProfileState = useCallback(() => {
+    setProfile(null);
+    setMastery([]);
+    setMatches([]);
+    setChampionStats([]);
+    setHasMore(false);
+    setTotalCached(0);
+    setTotalWins(0);
+    setTotalLosses(0);
+  }, []);
 
   const loadProfileByPuuid = useCallback(
     async (p: PlayerProfile) => {
@@ -53,19 +63,61 @@ export function useRiotApi() {
 
   const lastSearchRef = useRef<{ gameName: string; tagLine: string; profile: PlayerProfile } | null>(null);
 
+  const getCachedSearchProfile = useCallback((gameName: string, tagLine: string) => {
+    const nameNorm = gameName.toLowerCase();
+    const tagNorm = tagLine.toLowerCase();
+    const cached = lastSearchRef.current;
+
+    if (!cached) {
+      return null;
+    }
+
+    return cached.gameName.toLowerCase() === nameNorm &&
+      cached.tagLine.toLowerCase() === tagNorm
+      ? cached.profile
+      : null;
+  }, []);
+
+  const fetchProfile = useCallback(
+    async (gameName: string, tagLine: string) => {
+      const cached = getCachedSearchProfile(gameName, tagLine);
+      if (cached) {
+        return cached;
+      }
+
+      const p = await invoke<PlayerProfile>("search_player", {
+        gameName,
+        tagLine,
+      });
+      lastSearchRef.current = { gameName, tagLine, profile: p };
+      return p;
+    },
+    [getCachedSearchProfile]
+  );
+
+  const buildDetectedProfile = useCallback(
+    (detected: DetectedAccount): PlayerProfile => ({
+      puuid: detected.puuid,
+      gameName: detected.gameName,
+      tagLine: detected.tagLine,
+      summonerLevel: detected.summonerLevel,
+      profileIconId: detected.profileIconId,
+      ranked: detected.ranked,
+    }),
+    []
+  );
+
   const searchPlayer = useCallback(
     async (gameName: string, tagLine: string) => {
       if (busyRef.current) return;
 
-      const nameNorm = gameName.toLowerCase();
-      const tagNorm = tagLine.toLowerCase();
-      const cached = lastSearchRef.current;
-      if (cached && cached.gameName.toLowerCase() === nameNorm && cached.tagLine.toLowerCase() === tagNorm) {
+      const cachedProfile = getCachedSearchProfile(gameName, tagLine);
+      if (cachedProfile) {
         busyRef.current = true;
         setLoading(true);
         setError(null);
         try {
-          await loadProfileByPuuid(cached.profile);
+          await loadProfileByPuuid(cachedProfile);
         } finally {
           setLoading(false);
           busyRef.current = false;
@@ -77,21 +129,10 @@ export function useRiotApi() {
 
       setLoading(true);
       setError(null);
-      setProfile(null);
-      setMastery([]);
-      setMatches([]);
-      setChampionStats([]);
-      setHasMore(false);
-      setTotalCached(0);
-      setTotalWins(0);
-      setTotalLosses(0);
+      resetProfileState();
 
       try {
-        const p = await invoke<PlayerProfile>("search_player", {
-          gameName,
-          tagLine,
-        });
-        lastSearchRef.current = { gameName, tagLine, profile: p };
+        const p = await fetchProfile(gameName, tagLine);
         await loadProfileByPuuid(p);
       } catch (e) {
         setError(typeof e === "string" ? e : String(e));
@@ -100,7 +141,7 @@ export function useRiotApi() {
         busyRef.current = false;
       }
     },
-    [loadProfileByPuuid]
+    [fetchProfile, getCachedSearchProfile, loadProfileByPuuid, resetProfileState]
   );
 
   const loadDetectedAccount = useCallback(
@@ -110,24 +151,18 @@ export function useRiotApi() {
 
       setLoading(true);
       setError(null);
-      setProfile(null);
-      setMastery([]);
-      setMatches([]);
-      setChampionStats([]);
-      setHasMore(false);
-      setTotalCached(0);
-      setTotalWins(0);
-      setTotalLosses(0);
+      resetProfileState();
 
       try {
-        const p: PlayerProfile = {
-          puuid: detected.puuid,
-          gameName: detected.gameName,
-          tagLine: detected.tagLine,
-          summonerLevel: detected.summonerLevel,
-          profileIconId: detected.profileIconId,
-          ranked: detected.ranked,
-        };
+        let p: PlayerProfile;
+
+        try {
+          p = await fetchProfile(detected.gameName, detected.tagLine);
+        } catch {
+          // Cached account keeps the profile usable when name/tag lookup fails.
+          p = buildDetectedProfile(detected);
+        }
+
         await loadProfileByPuuid(p);
       } catch (e) {
         setError(typeof e === "string" ? e : String(e));
@@ -136,7 +171,7 @@ export function useRiotApi() {
         busyRef.current = false;
       }
     },
-    [loadProfileByPuuid]
+    [buildDetectedProfile, fetchProfile, loadProfileByPuuid, resetProfileState]
   );
 
   const loadMoreMatches = useCallback(async () => {
@@ -153,7 +188,7 @@ export function useRiotApi() {
         setHasMore(false);
         return;
       }
-      setMatches((prev) => {
+      setMatches((prev: MatchSummary[]) => {
         const combined = [...prev, ...newMatches];
         setHasMore(combined.length < totalCached);
         return combined;
