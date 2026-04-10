@@ -382,6 +382,7 @@ pub struct LiveFullPlayer {
     pub items: Option<Vec<LiveItem>>,
     pub summoner_name: Option<String>,
     pub riot_id_game_name: Option<String>,
+    pub riot_id_tag_line: Option<String>,
     pub summoner_spells: Option<LiveSummonerSpells>,
     pub is_dead: Option<bool>,
     pub respawn_timer: Option<f64>,

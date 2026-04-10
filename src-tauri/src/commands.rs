@@ -262,7 +262,7 @@ pub async fn get_live_game(
             if let Some(their_team) = &session.their_team {
                 for p in their_team {
                     players.push(EnrichLivePlayer {
-                        puuid: None,
+                        puuid: p.puuid.clone().filter(|s| !s.is_empty()),
                         game_name: None,
                         tag_line: None,
                         champion_id: p.champion_id.unwrap_or(0),
@@ -388,7 +388,9 @@ pub async fn get_live_game(
                 .unwrap_or_else(|| "ORDER".to_string());
 
             for lp in all_players {
-                let gn = lp.riot_id_game_name.clone();
+                let riot_game_name = lp.riot_id_game_name.clone().filter(|s| !s.is_empty());
+                let summoner_name = lp.summoner_name.clone().filter(|s| !s.is_empty());
+                let tag_line = lp.riot_id_tag_line.clone().filter(|s| !s.is_empty());
                 let champ_name = lp.champion_name.clone().unwrap_or_default();
                 let champ_id = name_to_id.get(&champ_name).copied().unwrap_or(0);
                 let pos = lp.position.clone().map(|pos| match pos.as_str() {
@@ -397,13 +399,13 @@ pub async fn get_live_game(
                 }.to_string());
 
                 let is_my_team = lp.team.as_deref() == Some(&my_team_str);
-                let is_me = gn.as_deref() == Some(&my_name)
-                    || lp.summoner_name.as_deref() == Some(&my_name);
+                let is_me = riot_game_name.as_deref() == Some(&my_name)
+                    || summoner_name.as_deref() == Some(&my_name);
 
                 players.push(EnrichLivePlayer {
                     puuid: if is_me { my_puuid.clone() } else { None },
-                    game_name: gn.or_else(|| lp.summoner_name.clone()),
-                    tag_line: None,
+                    game_name: riot_game_name.or(summoner_name),
+                    tag_line,
                     champion_id: champ_id,
                     assigned_position: pos,
                     spell1_id: 0,

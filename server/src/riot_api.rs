@@ -176,7 +176,11 @@ impl RiotApiClient {
     }
 
     pub async fn get_active_game(&self, puuid: &str) -> Result<SpectatorGame, String> {
-        let url = format!("{}/lol/spectator/v5/active-games/by-summoner/{}", PLATFORM_URL, puuid);
+        let summoner = self.get_summoner_by_puuid(puuid).await?;
+        let summoner_id = summoner
+            .id
+            .ok_or_else(|| "Не удалось получить summonerId для Spectator API".to_string())?;
+        let url = format!("{}/lol/spectator/v5/active-games/by-summoner/{}", PLATFORM_URL, summoner_id);
         self.get(&url).await
     }
 
