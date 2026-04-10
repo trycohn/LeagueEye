@@ -190,8 +190,9 @@ mod keyboard_hook {
     pub static IS_IN_GAME: AtomicBool = AtomicBool::new(false);
     static LEFT_SHIFT_HELD: AtomicBool = AtomicBool::new(false);
     static RIGHT_SHIFT_HELD: AtomicBool = AtomicBool::new(false);
+    static TAB_HELD: AtomicBool = AtomicBool::new(false);
 
-    const VK_E: i32 = 0x45;
+    const VK_TAB: i32 = 0x09;
     const VK_SHIFT: u32 = 0x10;
     const VK_LSHIFT: i32 = 0xA0;
     const VK_RSHIFT: i32 = 0xA1;
@@ -292,19 +293,25 @@ mod keyboard_hook {
                 sync_shift_state_from_event(kb, wparam == WM_KEYDOWN, APP_HANDLE.get());
             }
 
-            if wparam == WM_KEYDOWN && kb.vkCode == VK_E as u32 && IS_IN_GAME.load(Ordering::Relaxed) {
-                let shift_held = sync_shift_state_from_keyboard(APP_HANDLE.get());
-                if shift_held {
-                    if let Some(app) = APP_HANDLE.get() {
-                        if !super::league_window::current_visibility() {
-                            log::info!("[hook] Shift+E ignored because League window is not active");
-                            return unsafe { CallNextHookEx(0, code, wparam, lparam) };
-                        }
-                        log::info!("[hook] Shift+E detected via low-level hook");
-                        let overlay_shown = super::show_overlay_window_if_allowed(app).unwrap_or(false);
-                        if overlay_shown {
-                            let _ = super::show_gold_overlay_window_if_allowed(app);
-                            let _ = app.emit("hotkey-coach-trigger", ());
+            if kb.vkCode == VK_TAB as u32 {
+                if wparam == WM_KEYUP {
+                    TAB_HELD.store(false, Ordering::Relaxed);
+                } else if !TAB_HELD.swap(true, Ordering::Relaxed)
+                    && IS_IN_GAME.load(Ordering::Relaxed)
+                {
+                    let shift_held = sync_shift_state_from_keyboard(APP_HANDLE.get());
+                    if shift_held {
+                        if let Some(app) = APP_HANDLE.get() {
+                            if !super::league_window::current_visibility() {
+                                log::info!("[hook] Shift+Tab ignored because League window is not active");
+                                return unsafe { CallNextHookEx(0, code, wparam, lparam) };
+                            }
+                            log::info!("[hook] Shift+Tab detected via low-level hook");
+                            let overlay_shown = super::show_overlay_window_if_allowed(app).unwrap_or(false);
+                            if overlay_shown {
+                                let _ = super::show_gold_overlay_window_if_allowed(app);
+                                let _ = app.emit("hotkey-coach-trigger", ());
+                            }
                         }
                     }
                 }

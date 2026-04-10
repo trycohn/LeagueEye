@@ -98,14 +98,14 @@ export function OverlayApp() {
 
           {!isStreaming && !latestMessage && !error && (
             <p className="text-xs text-text-muted text-center py-3">
-              Shift+E — получить совет
+              Shift+Tab — получить совет
             </p>
           )}
         </div>
 
         {/* Footer */}
         <div className="px-3 py-1.5 border-t border-border/30 flex items-center justify-between">
-          <span className="text-[10px] text-text-muted">Shift+E — новый совет</span>
+          <span className="text-[10px] text-text-muted">Shift+Tab — новый совет</span>
           {!isStreaming && (
             <button
               onClick={() => requestAdvice()}
