@@ -466,7 +466,6 @@ pub fn run() {
             commands::get_global_dashboard,
             commands::get_match_detail,
             commands::request_coaching,
-            commands::test_coaching,
             commands::get_gold_comparison,
         ])
         .on_window_event(|window, event| {

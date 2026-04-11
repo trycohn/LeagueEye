@@ -204,4 +204,5 @@ pub struct EnrichLivePlayer {
     pub spell2_id: i32,
     pub team_id: i32,
     pub is_picking: bool,
+    pub summoner_id: Option<i64>,
 }

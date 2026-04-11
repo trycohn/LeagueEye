@@ -30,6 +30,7 @@ pub struct EnrichPlayer {
     pub spell2_id: i32,
     pub team_id: i32,
     pub is_picking: bool,
+    pub summoner_id: Option<i64>,
 }
 
 fn parse_riot_id(riot_id: &str) -> Option<(&str, &str)> {
@@ -112,6 +113,10 @@ pub async fn enrich_live_game(
 ) -> Result<Json<LiveGameData>, String> {
     let mut my_team: Vec<LivePlayer> = Vec::new();
     let mut enemy_team: Vec<LivePlayer> = Vec::new();
+    // Keep summoner_ids separate — they're only needed for rank fallback,
+    // not part of the shared LivePlayer DTO sent to the frontend.
+    let mut my_team_summoner_ids: Vec<Option<i64>> = Vec::new();
+    let mut enemy_team_summoner_ids: Vec<Option<i64>> = Vec::new();
 
     // Determine my team ID
     let my_team_id = req.my_puuid.as_ref()
@@ -134,8 +139,10 @@ pub async fn enrich_live_game(
         };
         if p.team_id == my_team_id {
             my_team.push(player);
+            my_team_summoner_ids.push(p.summoner_id);
         } else {
             enemy_team.push(player);
+            enemy_team_summoner_ids.push(p.summoner_id);
         }
     }
 
@@ -180,22 +187,78 @@ pub async fn enrich_live_game(
         }
     }
 
-    // Enrich all players with rank data
+    // Resolve missing puuids via Riot Account API (game_name + tag_line)
+    {
+        let all_players_info: Vec<_> = my_team.iter().chain(enemy_team.iter())
+            .map(|p| (p.puuid.clone(), p.game_name.clone(), p.tag_line.clone()))
+            .collect();
+
+        let resolve_futs: Vec<_> = all_players_info.iter()
+            .map(|(puuid, game_name, tag_line)| {
+                let state = state.clone();
+                let puuid = puuid.clone();
+                let gn = game_name.clone();
+                let tl = tag_line.clone();
+                async move {
+                    if puuid.is_some() { return puuid; }
+                    if let (Some(gn), Some(tl)) = (gn, tl) {
+                        match state.riot_api.get_account_by_riot_id(&gn, &tl).await {
+                            Ok(acc) => Some(acc.puuid),
+                            Err(e) => {
+                                log::debug!("[live] Riot ID resolve failed for {}#{}: {}", gn, tl, e);
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                }
+            })
+            .collect();
+
+        let resolved = futures::future::join_all(resolve_futs).await;
+        let my_count = my_team.len();
+        for (i, puuid) in resolved.into_iter().enumerate() {
+            if let Some(puuid) = puuid {
+                if i < my_count {
+                    my_team[i].puuid = Some(puuid);
+                } else {
+                    enemy_team[i - my_count].puuid = Some(puuid);
+                }
+            }
+        }
+    }
+
+    // Enrich all players with rank data.
+    // Primary: by puuid. Fallback: by summoner_id (from champ select LCU data).
+    let all_summoner_ids: Vec<Option<i64>> = my_team_summoner_ids.iter()
+        .chain(enemy_team_summoner_ids.iter())
+        .cloned()
+        .collect();
+
     let all_puuids: Vec<Option<String>> = my_team.iter()
         .chain(enemy_team.iter())
         .map(|p| p.puuid.clone())
         .collect();
 
-    let rank_futs: Vec<_> = all_puuids.iter()
-        .map(|puuid_opt| {
+    let rank_futs: Vec<_> = all_puuids.iter().zip(all_summoner_ids.iter())
+        .map(|(puuid_opt, sid_opt)| {
             let state = state.clone();
             let puuid_opt = puuid_opt.clone();
+            let sid_opt = *sid_opt;
             async move {
+                // 1. Try by puuid
                 if let Some(puuid) = &puuid_opt {
-                    state.riot_api.get_league_entries_by_puuid(puuid).await.ok()
-                } else {
-                    None
+                    if let Ok(entries) = state.riot_api.get_league_entries_by_puuid(puuid).await {
+                        return Some(entries);
+                    }
                 }
+                // 2. Fallback: try by summoner_id
+                if let Some(sid) = sid_opt {
+                    let sid_str = sid.to_string();
+                    return state.riot_api.get_league_entries(&sid_str).await.ok();
+                }
+                None
             }
         })
         .collect();

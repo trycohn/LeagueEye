@@ -1,0 +1,25 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "arbitron": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "https://arbitron.dev/multi/v1",
+        "apiKey": "gw-7b3fb6d2096b65bc0485ddb304f9af78e1896a2edfabc1f8"
+      },
+      "models": {
+        "claude-opus-4.6": {},
+        "claude-sonnet-4.6": {},
+        "gpt-5.4": {}
+      }
+    }
+  },
+  "model": "arbitron/claude-opus-4.6",
+  "mcp": {
+    "linear": {
+      "type": "remote",
+      "url": "https://mcp.linear.app/mcp",
+      "enabled": true
+    }
+  }
+}
