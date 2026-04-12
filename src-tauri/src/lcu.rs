@@ -1,11 +1,31 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+// ── LCU credential & install-dir caches ─────────────────────────────────────
+
+const CREDENTIALS_CACHE_TTL: Duration = Duration::from_secs(3);
+const INSTALL_DIR_CACHE_TTL: Duration = Duration::from_secs(60);
+
+struct CachedCredentials {
+    value: Option<LcuCredentials>,
+    updated_at: Instant,
+}
+
+struct CachedInstallDir {
+    value: Option<PathBuf>,
+    updated_at: Instant,
+}
+
+static CREDENTIALS_CACHE: Mutex<Option<CachedCredentials>> = Mutex::new(None);
+static INSTALL_DIR_CACHE: Mutex<Option<CachedInstallDir>> = Mutex::new(None);
 
 #[derive(Debug, Clone)]
 pub struct LcuCredentials {
@@ -91,12 +111,41 @@ pub struct ChampSelectBans {
 
 // ── Lockfile detection ────────────────────────────────────────────────────────
 
-/// Reads the League lockfile which contains port:token in a reliable format.
-/// Format: `LeagueClient:PID:PORT:TOKEN:PROTOCOL`
+/// Cached version — returns credentials from cache if TTL has not expired.
+/// All high-frequency pollers should use this.
 pub fn detect_lcu_credentials() -> Option<LcuCredentials> {
+    if let Ok(guard) = CREDENTIALS_CACHE.lock() {
+        if let Some(cached) = guard.as_ref() {
+            if cached.updated_at.elapsed() < CREDENTIALS_CACHE_TTL {
+                return cached.value.clone();
+            }
+        }
+    }
+
+    let result = detect_lcu_credentials_fresh();
+
+    if let Ok(mut guard) = CREDENTIALS_CACHE.lock() {
+        *guard = Some(CachedCredentials {
+            value: result.clone(),
+            updated_at: Instant::now(),
+        });
+    }
+
+    result
+}
+
+/// Bypasses the cache — use only for user-initiated actions (e.g. detect_account).
+pub fn detect_lcu_credentials_fresh() -> Option<LcuCredentials> {
     let candidates = lockfile_candidates_from_known_paths();
     for path in &candidates {
         if let Some(creds) = try_read_lockfile(path) {
+            // Also update the cache so pollers benefit immediately
+            if let Ok(mut guard) = CREDENTIALS_CACHE.lock() {
+                *guard = Some(CachedCredentials {
+                    value: Some(creds.clone()),
+                    updated_at: Instant::now(),
+                });
+            }
             return Some(creds);
         }
     }
@@ -104,6 +153,12 @@ pub fn detect_lcu_credentials() -> Option<LcuCredentials> {
     if let Some(dir) = find_league_dir_from_process() {
         let lockfile = dir.join("lockfile");
         if let Some(creds) = try_read_lockfile(&lockfile) {
+            if let Ok(mut guard) = CREDENTIALS_CACHE.lock() {
+                *guard = Some(CachedCredentials {
+                    value: Some(creds.clone()),
+                    updated_at: Instant::now(),
+                });
+            }
             return Some(creds);
         }
     }
@@ -111,7 +166,29 @@ pub fn detect_lcu_credentials() -> Option<LcuCredentials> {
     None
 }
 
+/// Cached version — install dir almost never changes at runtime.
 pub fn find_league_install_dir() -> Option<PathBuf> {
+    if let Ok(guard) = INSTALL_DIR_CACHE.lock() {
+        if let Some(cached) = guard.as_ref() {
+            if cached.updated_at.elapsed() < INSTALL_DIR_CACHE_TTL {
+                return cached.value.clone();
+            }
+        }
+    }
+
+    let result = find_league_install_dir_fresh();
+
+    if let Ok(mut guard) = INSTALL_DIR_CACHE.lock() {
+        *guard = Some(CachedInstallDir {
+            value: result.clone(),
+            updated_at: Instant::now(),
+        });
+    }
+
+    result
+}
+
+fn find_league_install_dir_fresh() -> Option<PathBuf> {
     for path in &lockfile_candidates_from_known_paths() {
         if path.exists() {
             if let Some(parent) = path.parent() {

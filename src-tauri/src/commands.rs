@@ -76,7 +76,8 @@ pub async fn detect_account(
     api: State<'_, ServerApiClient>,
     db: State<'_, SharedDb>,
 ) -> Result<DetectedAccount, String> {
-    let creds = lcu::detect_lcu_credentials()
+    // User-initiated action — bypass credential cache to get fresh data
+    let creds = lcu::detect_lcu_credentials_fresh()
         .ok_or_else(|| "League Client не запущен".to_string())?;
 
     let identity = lcu::get_lcu_identity(&creds).await?;
