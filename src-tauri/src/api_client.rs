@@ -180,7 +180,7 @@ impl ServerApiClient {
 }
 
 /// Request sent from client to server for live game enrichment
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct EnrichLiveRequest {
     pub phase: String,
@@ -192,7 +192,7 @@ pub struct EnrichLiveRequest {
     pub queue_id: Option<i32>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct EnrichLivePlayer {
     pub puuid: Option<String>,

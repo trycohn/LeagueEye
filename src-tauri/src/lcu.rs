@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -13,7 +13,7 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 const CREDENTIALS_CACHE_TTL: Duration = Duration::from_secs(3);
 const INSTALL_DIR_CACHE_TTL: Duration = Duration::from_secs(60);
-const GAMEFLOW_CACHE_TTL: Duration = Duration::from_secs(2);
+const GAMEFLOW_CACHE_TTL: Duration = Duration::from_secs(5);
 
 struct CachedCredentials {
     value: Option<LcuCredentials>,
@@ -309,32 +309,49 @@ fn find_league_dir_from_process() -> Option<PathBuf> {
     None
 }
 
-// ── LCU API via curl.exe ──────────────────────────────────────────────────────
+// ── LCU API via reqwest (replaces curl.exe for lower latency) ────────────────
 
-/// Uses system curl.exe to bypass TLS compatibility issues with reqwest/rustls
+/// Lazy-initialized blocking reqwest client with TLS verification disabled
+/// (LCU uses a self-signed certificate on 127.0.0.1).
+fn lcu_http_client() -> &'static reqwest::blocking::Client {
+    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .timeout(Duration::from_secs(5))
+            .build()
+            .expect("Failed to create LCU HTTP client")
+    })
+}
+
+/// Makes an authenticated GET request to the LCU API.
 fn curl_lcu(port: u16, token: &str, path: &str) -> Result<String, String> {
     let url = format!("https://127.0.0.1:{}{}", port, path);
     let start = std::time::Instant::now();
-    let output = Command::new("curl.exe")
-        .args(["-sk", "--max-time", "5", "-u", &format!("riot:{}", token), &url])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .map_err(|e| format!("curl.exe error: {}", e))?;
+
+    let response = lcu_http_client()
+        .get(&url)
+        .basic_auth("riot", Some(token))
+        .send()
+        .map_err(|e| format!("LCU request error: {}", e))?;
+
     let elapsed = start.elapsed();
     if elapsed.as_millis() > 100 {
         log::warn!("[perf] curl_lcu({}) took {:?}", path, elapsed);
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let status = response.status();
+    let body = response.text()
+        .map_err(|e| format!("LCU response read error: {}", e))?;
+    let body = body.trim().to_string();
 
-    if stdout.is_empty() {
-        return Err(format!("curl.exe returned empty response for {}: {}", path, stderr));
+    if body.is_empty() {
+        return Err(format!("LCU returned empty response for {} (status {})", path, status));
     }
-    if stdout.contains("\"errorCode\"") {
-        return Err(format!("LCU error for {}: {}", path, stdout));
+    if body.contains("\"errorCode\"") {
+        return Err(format!("LCU error for {}: {}", path, body));
     }
-    Ok(stdout)
+    Ok(body)
 }
 
 pub async fn get_lcu_identity(creds: &LcuCredentials) -> Result<LcuIdentity, String> {
@@ -421,23 +438,40 @@ pub struct LiveClientPlayer {
     pub team: Option<String>,
 }
 
+/// Lazy-initialized blocking reqwest client for the Live Client Data API (localhost:2999).
+/// Also uses a self-signed certificate.
+fn live_client_http_client() -> &'static reqwest::blocking::Client {
+    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .timeout(Duration::from_secs(2))
+            .build()
+            .expect("Failed to create Live Client HTTP client")
+    })
+}
+
 pub fn get_live_client_playerlist() -> Result<Vec<LiveClientPlayer>, String> {
     let start = std::time::Instant::now();
-    let output = Command::new("curl.exe")
-        .args(["-sk", "--max-time", "2", "https://127.0.0.1:2999/liveclientdata/playerlist"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .map_err(|e| format!("curl.exe error: {}", e))?;
+
+    let response = live_client_http_client()
+        .get("https://127.0.0.1:2999/liveclientdata/playerlist")
+        .send()
+        .map_err(|e| format!("Live Client API error: {}", e))?;
+
     let elapsed = start.elapsed();
     if elapsed.as_millis() > 100 {
-        log::warn!("[perf] get_live_client_playerlist (curl) took {:?}", elapsed);
+        log::warn!("[perf] get_live_client_playerlist took {:?}", elapsed);
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if stdout.is_empty() || stdout.contains("\"errorCode\"") {
+    let body = response.text()
+        .map_err(|e| format!("Live Client response read error: {}", e))?;
+    let body = body.trim().to_string();
+
+    if body.is_empty() || body.contains("\"errorCode\"") {
         return Err("Live Client API not available".to_string());
     }
-    serde_json::from_str::<Vec<LiveClientPlayer>>(&stdout)
+    serde_json::from_str::<Vec<LiveClientPlayer>>(&body)
         .map_err(|e| format!("Live Client parse error: {}", e))
 }
 
@@ -592,20 +626,24 @@ pub struct LiveGameInfo {
 
 pub fn get_live_client_allgamedata() -> Result<LiveAllGameData, String> {
     let start = std::time::Instant::now();
-    let output = Command::new("curl.exe")
-        .args(["-sk", "--max-time", "3", "https://127.0.0.1:2999/liveclientdata/allgamedata"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .map_err(|e| format!("curl.exe error: {}", e))?;
+
+    let response = live_client_http_client()
+        .get("https://127.0.0.1:2999/liveclientdata/allgamedata")
+        .send()
+        .map_err(|e| format!("Live Client allgamedata error: {}", e))?;
+
     let elapsed = start.elapsed();
     if elapsed.as_millis() > 100 {
-        log::warn!("[perf] get_live_client_allgamedata (curl) took {:?}", elapsed);
+        log::warn!("[perf] get_live_client_allgamedata took {:?}", elapsed);
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if stdout.is_empty() || stdout.contains("\"errorCode\"") {
+    let body = response.text()
+        .map_err(|e| format!("Live Client allgamedata read error: {}", e))?;
+    let body = body.trim().to_string();
+
+    if body.is_empty() || body.contains("\"errorCode\"") {
         return Err("Live Client allgamedata not available".to_string());
     }
-    serde_json::from_str::<LiveAllGameData>(&stdout)
+    serde_json::from_str::<LiveAllGameData>(&body)
         .map_err(|e| format!("Live Client allgamedata parse error: {}", e))
 }

@@ -20,7 +20,7 @@ import type { DetectedAccount } from "./lib/types";
 type View = "home" | "profile" | "live" | "settings";
 type LeagueWindowVisibilityPayload = { visible: boolean };
 
-const POLL_INTERVAL_MS = 8_000;
+const POLL_INTERVAL_MS = 4_000;
 
 export default function App() {
   const {

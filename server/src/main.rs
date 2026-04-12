@@ -1,8 +1,26 @@
 use axum::{Router, routing::{get, post}};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use sqlx::postgres::PgPoolOptions;
 use tower_http::cors::{CorsLayer, Any};
+
+use leagueeye_shared::models::RankInfo;
+
+/// Cached rank info for a player, keyed by puuid.
+pub struct CachedRank {
+    pub rank: Option<RankInfo>,
+    pub fetched_at: std::time::Instant,
+}
+
+/// Cached puuid resolved from game_name + tag_line.
+pub struct CachedPuuid {
+    pub puuid: String,
+    pub fetched_at: std::time::Instant,
+}
+
+pub const RANK_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(300); // 5 min
+pub const PUUID_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(600); // 10 min
 
 mod riot_api;
 mod db;
@@ -33,6 +51,10 @@ pub struct AppState {
     pub db: db::Db,
     pub ai_coach_config: Option<AiCoachConfig>,
     pub item_catalog: tokio::sync::OnceCell<item_catalog::ItemCatalog>,
+    /// Cache: puuid → rank (TTL 5 min). Avoids re-fetching ranks every poll.
+    pub rank_cache: tokio::sync::Mutex<HashMap<String, CachedRank>>,
+    /// Cache: "gameName#tagLine" → puuid (TTL 10 min).
+    pub puuid_cache: tokio::sync::Mutex<HashMap<String, CachedPuuid>>,
 }
 
 async fn health() -> &'static str {
@@ -76,6 +98,8 @@ async fn main() {
         db: db::Db::new(pool),
         ai_coach_config,
         item_catalog: tokio::sync::OnceCell::new(),
+        rank_cache: tokio::sync::Mutex::new(HashMap::new()),
+        puuid_cache: tokio::sync::Mutex::new(HashMap::new()),
     });
 
     let cors = CorsLayer::new()
