@@ -12,6 +12,19 @@
         "claude-sonnet-4.6": {},
         "gpt-5.4": {}
       }
+    },
+    "abuzgroup": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "https://abuzgroup.lol/v1",
+        "apiKey": "zk-fbedc17bf47971284984c887000a64f79bb3599e1c9cf9d4"
+      },
+      "models": {
+        "glm-5.1": {},
+        "glm-5": {},
+        "glm-4.7": {},
+        "glm-4.6": {}
+      }
     }
   },
   "model": "arbitron/claude-opus-4.6",
