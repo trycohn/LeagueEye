@@ -7,6 +7,7 @@ use tower_http::cors::{CorsLayer, Any};
 mod riot_api;
 mod db;
 mod routes;
+pub mod item_catalog;
 
 #[derive(Debug, Clone)]
 pub struct AiCoachConfig {
@@ -31,6 +32,7 @@ pub struct AppState {
     pub riot_api: riot_api::RiotApiClient,
     pub db: db::Db,
     pub ai_coach_config: Option<AiCoachConfig>,
+    pub item_catalog: tokio::sync::OnceCell<item_catalog::ItemCatalog>,
 }
 
 async fn health() -> &'static str {
@@ -73,6 +75,7 @@ async fn main() {
         riot_api: riot_api::RiotApiClient::new(api_key),
         db: db::Db::new(pool),
         ai_coach_config,
+        item_catalog: tokio::sync::OnceCell::new(),
     });
 
     let cors = CorsLayer::new()

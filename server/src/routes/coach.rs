@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::{AiCoachProvider, AppState};
+use crate::item_catalog::ItemCatalog;
 
 // ─── System prompt ──────────────────────────────────────────────────────────
 
@@ -82,9 +83,11 @@ impl MatchStage {
     }
 }
 
-fn build_system_prompt(ctx: &CoachingContext) -> String {
+fn build_system_prompt(ctx: &CoachingContext, catalog: Option<&ItemCatalog>) -> String {
+    let item_catalog_block = build_item_catalog_block(catalog);
+
     if ctx.phase == "champ_select" {
-        return r#"Ты — AI-тренер по League of Legends. Анализируй драфт и давай рекомендации.
+        let mut prompt = r#"Ты — AI-тренер по League of Legends. Анализируй драфт и давай рекомендации.
 
 Структура данных:
 - Блок «=== Я (игрок) ===» — это твой подопечный
@@ -100,6 +103,10 @@ fn build_system_prompt(ctx: &CoachingContext) -> String {
 - НЕ пиши названия умений — используй ТОЛЬКО (Q), (W), (E), (R), (Пассивное)
 - НЕ предполагай что у чемпиона мана — ресурс указан в данных
 - НИКАКОГО текста кроме двух строк с советами"#.to_string();
+        if !item_catalog_block.is_empty() {
+            prompt.push_str(&item_catalog_block);
+        }
+        return prompt;
     }
 
     let stage = MatchStage::from_game_time_secs(ctx.game_time_secs);
@@ -113,7 +120,7 @@ fn build_system_prompt(ctx: &CoachingContext) -> String {
         .map(MatchStage::anti_repeat_rule)
         .unwrap_or(UNKNOWN_STAGE_ANTI_REPEAT_RULE);
 
-    format!(r#"Ты — AI-тренер по League of Legends. Анализируй текущее состояние игры и давай рекомендации.
+    let mut prompt = format!(r#"Ты — AI-тренер по League of Legends. Анализируй текущее состояние игры и давай рекомендации.
 
 Структура данных:
 - Блок «=== Я (игрок) ===» — это твой подопечный. Его статы (KDA, CS, золото, предметы) указаны в этом блоке — ИСПОЛЬЗУЙ ИХ
@@ -133,12 +140,48 @@ fn build_system_prompt(ctx: &CoachingContext) -> String {
 - Называй чемпионов по ПОЛНЫМ именам (Мордекайзер, Мисс Фортуна, Чо'Гат)
 - НЕ пиши названия умений — используй ТОЛЬКО (Q), (W), (E), (R), (Пассивное)
 - НЕ предполагай что у чемпиона мана — ресурс указан в данных
-- НИКАКОГО текста кроме двух строк с советами"#)
+- НИКАКОГО текста кроме двух строк с советами"#);
+
+    if !item_catalog_block.is_empty() {
+        prompt.push_str(&item_catalog_block);
+    }
+
+    prompt
+}
+
+/// Build the item catalog block for the system prompt.
+/// Returns empty string if catalog is None or has no items.
+fn build_item_catalog_block(catalog: Option<&ItemCatalog>) -> String {
+    let catalog = match catalog {
+        Some(c) if !c.items.is_empty() => c,
+        _ => return String::new(),
+    };
+
+    let mut block = String::from("\n\n=== СПРАВОЧНИК ПРЕДМЕТОВ ===\nФормат: РУ (EN) | цена | теги\n");
+
+    for item in &catalog.items {
+        let tags = if item.tags.is_empty() {
+            String::new()
+        } else {
+            item.tags.join(",")
+        };
+        block.push_str(&format!(
+            "{} ({}) | {} | {}\n",
+            item.ru_name, item.en_name, item.gold_total, tags
+        ));
+    }
+
+    block.push_str("\n- Когда советуешь купить предмет — ОБЯЗАТЕЛЬНО используй русское название из СПРАВОЧНИКА ПРЕДМЕТОВ\n\
+- НЕ переводи названия предметов самостоятельно — бери ТОЛЬКО из справочника\n\
+- Если нужен предмет с определённым свойством — ищи по тегам в справочнике (Damage, SpellDamage, Armor, MagicResist, Health, AttackSpeed, CriticalStrike, AbilityHaste и т.д.)\n\
+- Учитывай стоимость предмета и текущее золото игрока");
+
+    block
 }
 
 // ─── Build user message ─────────────────────────────────────────────────────
 
-fn build_user_message(ctx: &CoachingContext) -> String {
+fn build_user_message(ctx: &CoachingContext, catalog: Option<&ItemCatalog>) -> String {
     let mut msg = String::new();
 
     if ctx.phase == "champ_select" {
@@ -200,7 +243,8 @@ fn build_user_message(ctx: &CoachingContext) -> String {
             }
             msg.push('\n');
             if !me.items.is_empty() {
-                msg.push_str(&format!("Предметы: {}\n", me.items.join(", ")));
+                let items_str = format_items_for_player(&me.items, catalog, true);
+                msg.push_str(&format!("Предметы: {}\n", items_str));
             }
         }
         if !me.rank_display.is_empty() {
@@ -226,12 +270,12 @@ fn build_user_message(ctx: &CoachingContext) -> String {
         let is_me = p.champion_name == ctx.my_champion
             && (ctx.my_position.is_empty() || p.position == ctx.my_position);
         let marker = if is_me { "[Я] " } else { "" };
-        write_player_line(&mut msg, p, marker, ctx.phase == "champ_select");
+        write_player_line(&mut msg, p, marker, ctx.phase == "champ_select", catalog);
     }
 
     msg.push_str("\nВражеская команда (ПРОТИВНИКИ):\n");
     for p in &ctx.enemy_team {
-        write_player_line(&mut msg, p, "", ctx.phase == "champ_select");
+        write_player_line(&mut msg, p, "", ctx.phase == "champ_select", catalog);
     }
 
     if !ctx.recent_events.is_empty() {
@@ -243,6 +287,56 @@ fn build_user_message(ctx: &CoachingContext) -> String {
 
     msg.push_str("\nДай мне конкретные советы для текущей ситуации.");
     msg
+}
+
+/// Format a list of item display_names using the catalog for translation.
+/// For `detailed` mode (the player's own block), includes gold + tags as hashtags.
+/// For team listing, includes only gold.
+fn format_items_for_player(items: &[String], catalog: Option<&ItemCatalog>, detailed: bool) -> String {
+    items
+        .iter()
+        .map(|en_name| format_single_item(en_name, catalog, detailed))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn format_single_item(en_name: &str, catalog: Option<&ItemCatalog>, detailed: bool) -> String {
+    let catalog = match catalog {
+        Some(c) => c,
+        None => return en_name.to_string(),
+    };
+
+    let ru_name = catalog
+        .en_to_ru
+        .get(en_name)
+        .cloned()
+        .unwrap_or_else(|| en_name.to_string());
+    let gold = catalog.en_to_gold.get(en_name).copied();
+    let tags = catalog.en_to_tags.get(en_name);
+
+    if detailed {
+        // "Спутник Людена (2850g #SpellDamage #Mana)"
+        let mut parts = ru_name.clone();
+        let mut meta = Vec::new();
+        if let Some(g) = gold {
+            meta.push(format!("{}g", g));
+        }
+        if let Some(t) = tags {
+            for tag in t {
+                meta.push(format!("#{}", tag));
+            }
+        }
+        if !meta.is_empty() {
+            parts.push_str(&format!(" ({})", meta.join(" ")));
+        }
+        parts
+    } else {
+        // "Спутник Людена (2850g)"
+        match gold {
+            Some(g) if g > 0 => format!("{} ({}g)", ru_name, g),
+            _ => ru_name,
+        }
+    }
 }
 
 /// Format resource for display. "None" → "Без ресурса", others as-is with English name in parens
@@ -266,7 +360,7 @@ fn format_resource(resource: &str) -> String {
     }
 }
 
-fn write_player_line(msg: &mut String, p: &CoachPlayerInfo, marker: &str, is_champ_select: bool) {
+fn write_player_line(msg: &mut String, p: &CoachPlayerInfo, marker: &str, is_champ_select: bool, catalog: Option<&ItemCatalog>) {
     msg.push_str(&format!("- {}{} ({}) ", marker, p.champion_name,
         if p.position.is_empty() { "?" } else { &p.position }));
 
@@ -295,7 +389,8 @@ fn write_player_line(msg: &mut String, p: &CoachPlayerInfo, marker: &str, is_cha
         msg.push_str(&format!("— {}/{}/{} — {} CS — Lv{}",
             p.kills, p.deaths, p.assists, p.cs, p.level));
         if !p.items.is_empty() {
-            msg.push_str(&format!(" — Items: {}", p.items.join(", ")));
+            let items_str = format_items_for_player(&p.items, catalog, false);
+            msg.push_str(&format!(" — Items: {}", items_str));
         }
         if p.is_dead {
             let secs = p.respawn_timer as i64;
@@ -316,8 +411,23 @@ pub async fn stream_coach(
     Json(ctx): Json<CoachingContext>,
 ) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
     let config = state.ai_coach_config.clone();
-    let system_prompt = build_system_prompt(&ctx);
-    let user_message = build_user_message(&ctx);
+
+    // Load item catalog (lazy, cached in OnceCell)
+    let catalog = state
+        .item_catalog
+        .get_or_try_init(|| async {
+            crate::item_catalog::load_item_catalog()
+                .await
+                .map_err(|e| {
+                    log::error!("[coach] Failed to load item catalog: {}", e);
+                    e
+                })
+        })
+        .await
+        .ok();
+
+    let system_prompt = build_system_prompt(&ctx, catalog);
+    let user_message = build_user_message(&ctx, catalog);
 
     log::info!("[coach] === SYSTEM PROMPT ===\n{}\n=========================", system_prompt);
     log::info!("[coach] === USER MESSAGE ===\n{}\n========================", user_message);
@@ -793,7 +903,7 @@ mod tests {
 
     #[test]
     fn user_message_includes_match_stage_and_focus() {
-        let message = build_user_message(&sample_context(Some(20 * 60)));
+        let message = build_user_message(&sample_context(Some(20 * 60)), None);
 
         assert!(message.contains("Фаза: В игре (20:00)"));
         assert!(message.contains("Стадия матча: средняя (mid game)"));
@@ -802,7 +912,7 @@ mod tests {
 
     #[test]
     fn user_message_uses_unknown_stage_fallback_when_time_missing() {
-        let message = build_user_message(&sample_context(None));
+        let message = build_user_message(&sample_context(None), None);
 
         assert!(message.contains("Фаза: В игре (?)"));
         assert!(message.contains("Стадия матча: неизвестна"));
@@ -813,7 +923,7 @@ mod tests {
 
     #[test]
     fn system_prompt_uses_stage_specific_focus_and_anti_repeat_rule() {
-        let prompt = build_system_prompt(&sample_context(Some(31 * 60)));
+        let prompt = build_system_prompt(&sample_context(Some(31 * 60)), None);
 
         assert!(prompt.contains("Стадия матча сейчас: поздняя (late game)"));
         assert!(prompt.contains(
@@ -826,7 +936,7 @@ mod tests {
 
     #[test]
     fn system_prompt_uses_neutral_fallback_when_stage_unknown() {
-        let prompt = build_system_prompt(&sample_context(None));
+        let prompt = build_system_prompt(&sample_context(None), None);
 
         assert!(prompt.contains("Стадия матча сейчас: неизвестная"));
         assert!(prompt.contains(
@@ -842,10 +952,121 @@ mod tests {
         let mut ctx = sample_context(Some(20 * 60));
         ctx.phase = "champ_select".to_string();
 
-        let prompt = build_system_prompt(&ctx);
+        let prompt = build_system_prompt(&ctx, None);
 
         assert!(prompt.contains("Анализируй драфт и давай рекомендации"));
         assert!(!prompt.contains("Стадия матча сейчас:"));
         assert!(!prompt.contains("{stage_label}"));
+    }
+
+    // ── Item catalog integration tests ──────────────────────────────────
+
+    fn sample_catalog() -> ItemCatalog {
+        use std::collections::HashMap;
+
+        let items = vec![
+            crate::item_catalog::CatalogItem {
+                id: 3031,
+                en_name: "Infinity Edge".to_string(),
+                ru_name: "\u{0413}\u{0440}\u{0430}\u{043d}\u{044c} \u{0411}\u{0435}\u{0441}\u{043a}\u{043e}\u{043d}\u{0435}\u{0447}\u{043d}\u{043e}\u{0441}\u{0442}\u{0438}".to_string(),
+                gold_total: 3400,
+                tags: vec!["Damage".to_string(), "CriticalStrike".to_string()],
+            },
+            crate::item_catalog::CatalogItem {
+                id: 2900,
+                en_name: "Spirit Visage".to_string(),
+                ru_name: "\u{041e}\u{0431}\u{043b}\u{0430}\u{0447}\u{0435}\u{043d}\u{0438}\u{0435} \u{0414}\u{0443}\u{0445}\u{0430}".to_string(),
+                gold_total: 2900,
+                tags: vec!["Health".to_string(), "SpellBlock".to_string()],
+            },
+        ];
+
+        let mut en_to_ru = HashMap::new();
+        let mut en_to_gold = HashMap::new();
+        let mut en_to_tags = HashMap::new();
+
+        // Include items + a component item "Lost Chapter"
+        for item in &items {
+            en_to_ru.insert(item.en_name.clone(), item.ru_name.clone());
+            en_to_gold.insert(item.en_name.clone(), item.gold_total);
+            en_to_tags.insert(item.en_name.clone(), item.tags.clone());
+        }
+        en_to_ru.insert("Lost Chapter".to_string(), "\u{041f}\u{043e}\u{0442}\u{0435}\u{0440}\u{044f}\u{043d}\u{043d}\u{0430}\u{044f} \u{0413}\u{043b}\u{0430}\u{0432}\u{0430}".to_string());
+        en_to_gold.insert("Lost Chapter".to_string(), 1300);
+        en_to_tags.insert("Lost Chapter".to_string(), vec!["SpellDamage".to_string(), "Mana".to_string()]);
+
+        ItemCatalog {
+            items,
+            en_to_ru,
+            en_to_gold,
+            en_to_tags,
+        }
+    }
+
+    #[test]
+    fn system_prompt_includes_item_catalog_when_present() {
+        let catalog = sample_catalog();
+        let prompt = build_system_prompt(&sample_context(Some(20 * 60)), Some(&catalog));
+
+        assert!(prompt.contains("=== СПРАВОЧНИК ПРЕДМЕТОВ ==="));
+        assert!(prompt.contains("\u{0413}\u{0440}\u{0430}\u{043d}\u{044c} \u{0411}\u{0435}\u{0441}\u{043a}\u{043e}\u{043d}\u{0435}\u{0447}\u{043d}\u{043e}\u{0441}\u{0442}\u{0438} (Infinity Edge) | 3400 | Damage,CriticalStrike"));
+        assert!(prompt.contains("ОБЯЗАТЕЛЬНО используй русское название из СПРАВОЧНИКА ПРЕДМЕТОВ"));
+    }
+
+    #[test]
+    fn system_prompt_without_catalog_has_no_item_block() {
+        let prompt = build_system_prompt(&sample_context(Some(20 * 60)), None);
+
+        assert!(!prompt.contains("СПРАВОЧНИК ПРЕДМЕТОВ"));
+    }
+
+    #[test]
+    fn champ_select_prompt_includes_catalog_too() {
+        let catalog = sample_catalog();
+        let mut ctx = sample_context(Some(20 * 60));
+        ctx.phase = "champ_select".to_string();
+
+        let prompt = build_system_prompt(&ctx, Some(&catalog));
+
+        assert!(prompt.contains("=== СПРАВОЧНИК ПРЕДМЕТОВ ==="));
+        assert!(prompt.contains("Анализируй драфт и давай рекомендации"));
+    }
+
+    #[test]
+    fn user_message_translates_items_with_catalog() {
+        let catalog = sample_catalog();
+        let message = build_user_message(&sample_context(Some(20 * 60)), Some(&catalog));
+
+        // Player's own items (detailed format with gold + tags)
+        assert!(message.contains("\u{041f}\u{043e}\u{0442}\u{0435}\u{0440}\u{044f}\u{043d}\u{043d}\u{0430}\u{044f} \u{0413}\u{043b}\u{0430}\u{0432}\u{0430} (1300g #SpellDamage #Mana)"));
+
+        // Team listing (short format with gold only)
+        assert!(message.contains("\u{041f}\u{043e}\u{0442}\u{0435}\u{0440}\u{044f}\u{043d}\u{043d}\u{0430}\u{044f} \u{0413}\u{043b}\u{0430}\u{0432}\u{0430} (1300g)"));
+    }
+
+    #[test]
+    fn user_message_keeps_en_name_when_not_in_catalog() {
+        let catalog = sample_catalog();
+        let mut ctx = sample_context(Some(20 * 60));
+        ctx.my_team[0].items = vec!["Unknown New Item".to_string()];
+        ctx.enemy_team[0].items = vec!["Unknown New Item".to_string()];
+
+        let message = build_user_message(&ctx, Some(&catalog));
+
+        assert!(message.contains("Unknown New Item"));
+    }
+
+    #[test]
+    fn user_message_without_catalog_uses_en_names() {
+        let message = build_user_message(&sample_context(Some(20 * 60)), None);
+
+        assert!(message.contains("Lost Chapter"));
+        assert!(!message.contains("\u{041f}\u{043e}\u{0442}\u{0435}\u{0440}\u{044f}\u{043d}\u{043d}\u{0430}\u{044f}"));
+    }
+
+    #[test]
+    fn format_items_empty_list() {
+        let result = format_items_for_player(&[], Some(&sample_catalog()), true);
+        assert_eq!(result, "");
     }
 }
