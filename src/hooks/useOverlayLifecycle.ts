@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-const POLL_INTERVAL_MS = 500;
+const POLL_INTERVAL_MS = 2_000;
 
 export function useOverlayLifecycle(enabled: boolean) {
   const [overlayEligible, setOverlayEligible] = useState(false);

@@ -3,7 +3,7 @@ use axum::Json;
 use std::sync::Arc;
 
 use leagueeye_shared::models::*;
-use crate::AppState;
+use crate::{AppState, CachedRank, CachedPuuid, RANK_CACHE_TTL, PUUID_CACHE_TTL};
 
 // Request from client with LCU data
 #[derive(serde::Deserialize)]
@@ -89,6 +89,7 @@ fn find_matching_player_index(
 
 fn hydrate_player_from_spectator(
     players: &mut [LivePlayer],
+    summoner_ids: &mut [Option<i64>],
     spec_p: &SpectatorParticipant,
 ) -> Result<(), &'static str> {
     let idx = find_matching_player_index(players, spec_p)?;
@@ -101,6 +102,15 @@ fn hydrate_player_from_spectator(
     if let Some((game_name, tag_line)) = spec_p.riot_id.as_deref().and_then(parse_riot_id) {
         player.game_name = Some(game_name.to_string());
         player.tag_line = Some(tag_line.to_string());
+    }
+
+    // Hydrate summoner_id from Spectator API (String → i64) for rank fallback
+    if summoner_ids[idx].is_none() {
+        if let Some(ref sid_str) = spec_p.summoner_id {
+            if let Ok(sid) = sid_str.parse::<i64>() {
+                summoner_ids[idx] = Some(sid);
+            }
+        }
     }
 
     Ok(())
@@ -161,13 +171,13 @@ pub async fn enrich_live_game(
                         for spec_p in &spec_game.participants {
                             let relative_team_id =
                                 relative_team_id_from_spectator(spec_p.team_id, my_spec_team_id);
-                            let target_team = if relative_team_id == 100 {
-                                &mut my_team
+                            let (target_team, target_sids) = if relative_team_id == 100 {
+                                (&mut my_team, &mut my_team_summoner_ids)
                             } else {
-                                &mut enemy_team
+                                (&mut enemy_team, &mut enemy_team_summoner_ids)
                             };
 
-                            if let Err(reason) = hydrate_player_from_spectator(target_team, spec_p) {
+                            if let Err(reason) = hydrate_player_from_spectator(target_team, target_sids, spec_p) {
                                 log::warn!(
                                     "[live] Spectator hydration skipped for team {} champion {}: {}",
                                     relative_team_id,
@@ -187,7 +197,7 @@ pub async fn enrich_live_game(
         }
     }
 
-    // Resolve missing puuids via Riot Account API (game_name + tag_line)
+    // Resolve missing puuids via cache, then Riot Account API (game_name + tag_line)
     {
         let all_players_info: Vec<_> = my_team.iter().chain(enemy_team.iter())
             .map(|p| (p.puuid.clone(), p.game_name.clone(), p.tag_line.clone()))
@@ -202,8 +212,30 @@ pub async fn enrich_live_game(
                 async move {
                     if puuid.is_some() { return puuid; }
                     if let (Some(gn), Some(tl)) = (gn, tl) {
+                        let cache_key = format!("{}#{}", gn.to_lowercase(), tl.to_lowercase());
+
+                        // Check puuid cache first
+                        {
+                            let cache = state.puuid_cache.lock().await;
+                            if let Some(cached) = cache.get(&cache_key) {
+                                if cached.fetched_at.elapsed() < PUUID_CACHE_TTL {
+                                    return Some(cached.puuid.clone());
+                                }
+                            }
+                        }
+
                         match state.riot_api.get_account_by_riot_id(&gn, &tl).await {
-                            Ok(acc) => Some(acc.puuid),
+                            Ok(acc) => {
+                                // Store in cache
+                                {
+                                    let mut cache = state.puuid_cache.lock().await;
+                                    cache.insert(cache_key, CachedPuuid {
+                                        puuid: acc.puuid.clone(),
+                                        fetched_at: std::time::Instant::now(),
+                                    });
+                                }
+                                Some(acc.puuid)
+                            }
                             Err(e) => {
                                 log::debug!("[live] Riot ID resolve failed for {}#{}: {}", gn, tl, e);
                                 None
@@ -229,8 +261,8 @@ pub async fn enrich_live_game(
         }
     }
 
-    // Enrich all players with rank data.
-    // Primary: by puuid. Fallback: by summoner_id (from champ select LCU data).
+    // Enrich all players with rank data (with cache).
+    // Primary: by puuid (cached). Fallback: by summoner_id (from champ select LCU data or Spectator).
     let all_summoner_ids: Vec<Option<i64>> = my_team_summoner_ids.iter()
         .chain(enemy_team_summoner_ids.iter())
         .cloned()
@@ -247,17 +279,57 @@ pub async fn enrich_live_game(
             let puuid_opt = puuid_opt.clone();
             let sid_opt = *sid_opt;
             async move {
-                // 1. Try by puuid
-                if let Some(puuid) = &puuid_opt {
+                // 1. Try rank cache by puuid
+                if let Some(ref puuid) = puuid_opt {
+                    {
+                        let cache = state.rank_cache.lock().await;
+                        if let Some(cached) = cache.get(puuid.as_str()) {
+                            if cached.fetched_at.elapsed() < RANK_CACHE_TTL {
+                                return cached.rank.clone();
+                            }
+                        }
+                    }
+
+                    // Cache miss — fetch from Riot API
                     if let Ok(entries) = state.riot_api.get_league_entries_by_puuid(puuid).await {
-                        return Some(entries);
+                        let ri = build_rank_info(entries);
+                        let rank = ri.iter().find(|r| r.queue_type == "RANKED_SOLO_5x5")
+                            .or(ri.first())
+                            .cloned();
+
+                        // Store in cache
+                        {
+                            let mut cache = state.rank_cache.lock().await;
+                            cache.insert(puuid.clone(), CachedRank {
+                                rank: rank.clone(),
+                                fetched_at: std::time::Instant::now(),
+                            });
+                        }
+                        return rank;
                     }
                 }
+
                 // 2. Fallback: try by summoner_id
                 if let Some(sid) = sid_opt {
                     let sid_str = sid.to_string();
-                    return state.riot_api.get_league_entries(&sid_str).await.ok();
+                    if let Ok(entries) = state.riot_api.get_league_entries(&sid_str).await {
+                        let ri = build_rank_info(entries);
+                        let rank = ri.iter().find(|r| r.queue_type == "RANKED_SOLO_5x5")
+                            .or(ri.first())
+                            .cloned();
+
+                        // If we also have a puuid, cache the result for future lookups
+                        if let Some(ref puuid) = puuid_opt {
+                            let mut cache = state.rank_cache.lock().await;
+                            cache.insert(puuid.clone(), CachedRank {
+                                rank: rank.clone(),
+                                fetched_at: std::time::Instant::now(),
+                            });
+                        }
+                        return rank;
+                    }
                 }
+
                 None
             }
         })
@@ -265,17 +337,11 @@ pub async fn enrich_live_game(
     let ranks = futures::future::join_all(rank_futs).await;
 
     let my_count = my_team.len();
-    for (i, entries_opt) in ranks.into_iter().enumerate() {
-        if let Some(entries) = entries_opt {
-            let ri = build_rank_info(entries);
-            let rank = ri.iter().find(|r| r.queue_type == "RANKED_SOLO_5x5")
-                .or(ri.first())
-                .cloned();
-            if i < my_count {
-                my_team[i].rank = rank;
-            } else {
-                enemy_team[i - my_count].rank = rank;
-            }
+    for (i, rank) in ranks.into_iter().enumerate() {
+        if i < my_count {
+            my_team[i].rank = rank;
+        } else {
+            enemy_team[i - my_count].rank = rank;
         }
     }
 
@@ -344,9 +410,10 @@ mod tests {
             live_player(100, 157, None, Some("Tryconn"), None),
             live_player(100, 157, None, None, None),
         ];
+        let mut sids = vec![None, None];
 
         let participant = spectator_player(200, 157, Some("ally-puuid"), Some("Tryconn#EUW"));
-        hydrate_player_from_spectator(&mut players, &participant).unwrap();
+        hydrate_player_from_spectator(&mut players, &mut sids, &participant).unwrap();
 
         assert_eq!(players[0].puuid.as_deref(), Some("ally-puuid"));
         assert_eq!(players[0].game_name.as_deref(), Some("Tryconn"));
@@ -360,9 +427,10 @@ mod tests {
             live_player(200, 238, None, None, None),
             live_player(200, 238, None, None, None),
         ];
+        let mut sids = vec![None, None];
 
         let participant = spectator_player(100, 238, Some("enemy-puuid"), None);
-        let err = hydrate_player_from_spectator(&mut players, &participant).unwrap_err();
+        let err = hydrate_player_from_spectator(&mut players, &mut sids, &participant).unwrap_err();
 
         assert_eq!(err, "multiple champion matches");
         assert!(players.iter().all(|player| player.puuid.is_none()));

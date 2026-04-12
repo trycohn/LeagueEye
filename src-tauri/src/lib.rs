@@ -401,6 +401,10 @@ pub fn run() {
                 )?;
             }
 
+            // ── Auto-updater + process relaunch ──
+            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+            app.handle().plugin(tauri_plugin_process::init())?;
+
             let app_data = app
                 .path()
                 .app_data_dir()
@@ -467,6 +471,9 @@ pub fn run() {
             commands::get_match_detail,
             commands::request_coaching,
             commands::get_gold_comparison,
+            commands::get_app_version,
+            commands::check_for_update,
+            commands::install_update,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

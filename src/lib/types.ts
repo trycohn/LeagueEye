@@ -210,3 +210,11 @@ export interface LaneGoldComparison {
   enemyGold: number;
   goldDiff: number;
 }
+
+// --- Updates ---
+
+export interface UpdateInfo {
+  version: string;
+  body: string | null;
+  date: string | null;
+}

@@ -1,11 +1,39 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+// ── LCU credential & install-dir & gameflow caches ──────────────────────────
+
+const CREDENTIALS_CACHE_TTL: Duration = Duration::from_secs(3);
+const INSTALL_DIR_CACHE_TTL: Duration = Duration::from_secs(60);
+const GAMEFLOW_CACHE_TTL: Duration = Duration::from_secs(5);
+
+struct CachedCredentials {
+    value: Option<LcuCredentials>,
+    updated_at: Instant,
+}
+
+struct CachedInstallDir {
+    value: Option<PathBuf>,
+    updated_at: Instant,
+}
+
+struct CachedGameflowPhase {
+    value: Result<String, String>,
+    port: u16,
+    updated_at: Instant,
+}
+
+static CREDENTIALS_CACHE: Mutex<Option<CachedCredentials>> = Mutex::new(None);
+static INSTALL_DIR_CACHE: Mutex<Option<CachedInstallDir>> = Mutex::new(None);
+static GAMEFLOW_CACHE: Mutex<Option<CachedGameflowPhase>> = Mutex::new(None);
 
 #[derive(Debug, Clone)]
 pub struct LcuCredentials {
@@ -91,12 +119,46 @@ pub struct ChampSelectBans {
 
 // ── Lockfile detection ────────────────────────────────────────────────────────
 
-/// Reads the League lockfile which contains port:token in a reliable format.
-/// Format: `LeagueClient:PID:PORT:TOKEN:PROTOCOL`
+/// Cached version — returns credentials from cache if TTL has not expired.
+/// All high-frequency pollers should use this.
 pub fn detect_lcu_credentials() -> Option<LcuCredentials> {
+    if let Ok(guard) = CREDENTIALS_CACHE.lock() {
+        if let Some(cached) = guard.as_ref() {
+            if cached.updated_at.elapsed() < CREDENTIALS_CACHE_TTL {
+                return cached.value.clone();
+            }
+        }
+    }
+
+    let start = std::time::Instant::now();
+    let result = detect_lcu_credentials_fresh();
+    let elapsed = start.elapsed();
+    if elapsed.as_millis() > 100 {
+        log::warn!("[perf] detect_lcu_credentials_fresh (cache miss) took {:?}, found={}", elapsed, result.is_some());
+    }
+
+    if let Ok(mut guard) = CREDENTIALS_CACHE.lock() {
+        *guard = Some(CachedCredentials {
+            value: result.clone(),
+            updated_at: Instant::now(),
+        });
+    }
+
+    result
+}
+
+/// Bypasses the cache — use only for user-initiated actions (e.g. detect_account).
+pub fn detect_lcu_credentials_fresh() -> Option<LcuCredentials> {
     let candidates = lockfile_candidates_from_known_paths();
     for path in &candidates {
         if let Some(creds) = try_read_lockfile(path) {
+            // Also update the cache so pollers benefit immediately
+            if let Ok(mut guard) = CREDENTIALS_CACHE.lock() {
+                *guard = Some(CachedCredentials {
+                    value: Some(creds.clone()),
+                    updated_at: Instant::now(),
+                });
+            }
             return Some(creds);
         }
     }
@@ -104,6 +166,12 @@ pub fn detect_lcu_credentials() -> Option<LcuCredentials> {
     if let Some(dir) = find_league_dir_from_process() {
         let lockfile = dir.join("lockfile");
         if let Some(creds) = try_read_lockfile(&lockfile) {
+            if let Ok(mut guard) = CREDENTIALS_CACHE.lock() {
+                *guard = Some(CachedCredentials {
+                    value: Some(creds.clone()),
+                    updated_at: Instant::now(),
+                });
+            }
             return Some(creds);
         }
     }
@@ -111,7 +179,29 @@ pub fn detect_lcu_credentials() -> Option<LcuCredentials> {
     None
 }
 
+/// Cached version — install dir almost never changes at runtime.
 pub fn find_league_install_dir() -> Option<PathBuf> {
+    if let Ok(guard) = INSTALL_DIR_CACHE.lock() {
+        if let Some(cached) = guard.as_ref() {
+            if cached.updated_at.elapsed() < INSTALL_DIR_CACHE_TTL {
+                return cached.value.clone();
+            }
+        }
+    }
+
+    let result = find_league_install_dir_fresh();
+
+    if let Ok(mut guard) = INSTALL_DIR_CACHE.lock() {
+        *guard = Some(CachedInstallDir {
+            value: result.clone(),
+            updated_at: Instant::now(),
+        });
+    }
+
+    result
+}
+
+fn find_league_install_dir_fresh() -> Option<PathBuf> {
     for path in &lockfile_candidates_from_known_paths() {
         if path.exists() {
             if let Some(parent) = path.parent() {
@@ -185,6 +275,7 @@ fn try_read_lockfile(path: &Path) -> Option<LcuCredentials> {
 }
 
 fn find_league_dir_from_process() -> Option<PathBuf> {
+    let start = std::time::Instant::now();
     let ps_cmd = r#"
         $procs = Get-WmiObject Win32_Process |
             Where-Object { $_.Name -like '*League*' -or $_.Name -like '*Riot*' } |
@@ -198,6 +289,8 @@ fn find_league_dir_from_process() -> Option<PathBuf> {
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .ok()?;
+    let elapsed = start.elapsed();
+    log::warn!("[perf] find_league_dir_from_process (PowerShell) took {:?}", elapsed);
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     for line in stdout.lines() {
@@ -216,27 +309,49 @@ fn find_league_dir_from_process() -> Option<PathBuf> {
     None
 }
 
-// ── LCU API via curl.exe ──────────────────────────────────────────────────────
+// ── LCU API via reqwest (replaces curl.exe for lower latency) ────────────────
 
-/// Uses system curl.exe to bypass TLS compatibility issues with reqwest/rustls
+/// Lazy-initialized blocking reqwest client with TLS verification disabled
+/// (LCU uses a self-signed certificate on 127.0.0.1).
+fn lcu_http_client() -> &'static reqwest::blocking::Client {
+    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .timeout(Duration::from_secs(5))
+            .build()
+            .expect("Failed to create LCU HTTP client")
+    })
+}
+
+/// Makes an authenticated GET request to the LCU API.
 fn curl_lcu(port: u16, token: &str, path: &str) -> Result<String, String> {
     let url = format!("https://127.0.0.1:{}{}", port, path);
-    let output = Command::new("curl.exe")
-        .args(["-sk", "--max-time", "5", "-u", &format!("riot:{}", token), &url])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .map_err(|e| format!("curl.exe error: {}", e))?;
+    let start = std::time::Instant::now();
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let response = lcu_http_client()
+        .get(&url)
+        .basic_auth("riot", Some(token))
+        .send()
+        .map_err(|e| format!("LCU request error: {}", e))?;
 
-    if stdout.is_empty() {
-        return Err(format!("curl.exe returned empty response for {}: {}", path, stderr));
+    let elapsed = start.elapsed();
+    if elapsed.as_millis() > 100 {
+        log::warn!("[perf] curl_lcu({}) took {:?}", path, elapsed);
     }
-    if stdout.contains("\"errorCode\"") {
-        return Err(format!("LCU error for {}: {}", path, stdout));
+
+    let status = response.status();
+    let body = response.text()
+        .map_err(|e| format!("LCU response read error: {}", e))?;
+    let body = body.trim().to_string();
+
+    if body.is_empty() {
+        return Err(format!("LCU returned empty response for {} (status {})", path, status));
     }
-    Ok(stdout)
+    if body.contains("\"errorCode\"") {
+        return Err(format!("LCU error for {}: {}", path, body));
+    }
+    Ok(body)
 }
 
 pub async fn get_lcu_identity(creds: &LcuCredentials) -> Result<LcuIdentity, String> {
@@ -277,11 +392,34 @@ pub fn is_lcu_running() -> bool {
     detect_lcu_credentials().is_some()
 }
 
-/// Returns the current gameflow phase from the LCU.
+/// Returns the current gameflow phase from the LCU (cached with 2s TTL).
 /// Possible values: "None", "Lobby", "Matchmaking", "ReadyCheck",
 /// "ChampSelect", "GameStart", "InProgress", "WaitingForStats",
 /// "EndOfGame", "Reconnect", etc.
 pub fn get_gameflow_phase(creds: &LcuCredentials) -> Result<String, String> {
+    // Return cached result if same port and TTL not expired
+    if let Ok(guard) = GAMEFLOW_CACHE.lock() {
+        if let Some(cached) = guard.as_ref() {
+            if cached.port == creds.port && cached.updated_at.elapsed() < GAMEFLOW_CACHE_TTL {
+                return cached.value.clone();
+            }
+        }
+    }
+
+    let result = get_gameflow_phase_fresh(creds);
+
+    if let Ok(mut guard) = GAMEFLOW_CACHE.lock() {
+        *guard = Some(CachedGameflowPhase {
+            value: result.clone(),
+            port: creds.port,
+            updated_at: Instant::now(),
+        });
+    }
+
+    result
+}
+
+fn get_gameflow_phase_fresh(creds: &LcuCredentials) -> Result<String, String> {
     let body = curl_lcu(creds.port, &creds.token, "/lol-gameflow/v1/gameflow-phase")?;
     // The response is a JSON string like "InProgress" (with quotes)
     let phase = body.trim().trim_matches('"').to_string();
@@ -300,18 +438,40 @@ pub struct LiveClientPlayer {
     pub team: Option<String>,
 }
 
-pub fn get_live_client_playerlist() -> Result<Vec<LiveClientPlayer>, String> {
-    let output = Command::new("curl.exe")
-        .args(["-sk", "--max-time", "2", "https://127.0.0.1:2999/liveclientdata/playerlist"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .map_err(|e| format!("curl.exe error: {}", e))?;
+/// Lazy-initialized blocking reqwest client for the Live Client Data API (localhost:2999).
+/// Also uses a self-signed certificate.
+fn live_client_http_client() -> &'static reqwest::blocking::Client {
+    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .timeout(Duration::from_secs(2))
+            .build()
+            .expect("Failed to create Live Client HTTP client")
+    })
+}
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if stdout.is_empty() || stdout.contains("\"errorCode\"") {
+pub fn get_live_client_playerlist() -> Result<Vec<LiveClientPlayer>, String> {
+    let start = std::time::Instant::now();
+
+    let response = live_client_http_client()
+        .get("https://127.0.0.1:2999/liveclientdata/playerlist")
+        .send()
+        .map_err(|e| format!("Live Client API error: {}", e))?;
+
+    let elapsed = start.elapsed();
+    if elapsed.as_millis() > 100 {
+        log::warn!("[perf] get_live_client_playerlist took {:?}", elapsed);
+    }
+
+    let body = response.text()
+        .map_err(|e| format!("Live Client response read error: {}", e))?;
+    let body = body.trim().to_string();
+
+    if body.is_empty() || body.contains("\"errorCode\"") {
         return Err("Live Client API not available".to_string());
     }
-    serde_json::from_str::<Vec<LiveClientPlayer>>(&stdout)
+    serde_json::from_str::<Vec<LiveClientPlayer>>(&body)
         .map_err(|e| format!("Live Client parse error: {}", e))
 }
 
@@ -465,16 +625,25 @@ pub struct LiveGameInfo {
 }
 
 pub fn get_live_client_allgamedata() -> Result<LiveAllGameData, String> {
-    let output = Command::new("curl.exe")
-        .args(["-sk", "--max-time", "3", "https://127.0.0.1:2999/liveclientdata/allgamedata"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .map_err(|e| format!("curl.exe error: {}", e))?;
+    let start = std::time::Instant::now();
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if stdout.is_empty() || stdout.contains("\"errorCode\"") {
+    let response = live_client_http_client()
+        .get("https://127.0.0.1:2999/liveclientdata/allgamedata")
+        .send()
+        .map_err(|e| format!("Live Client allgamedata error: {}", e))?;
+
+    let elapsed = start.elapsed();
+    if elapsed.as_millis() > 100 {
+        log::warn!("[perf] get_live_client_allgamedata took {:?}", elapsed);
+    }
+
+    let body = response.text()
+        .map_err(|e| format!("Live Client allgamedata read error: {}", e))?;
+    let body = body.trim().to_string();
+
+    if body.is_empty() || body.contains("\"errorCode\"") {
         return Err("Live Client allgamedata not available".to_string());
     }
-    serde_json::from_str::<LiveAllGameData>(&stdout)
+    serde_json::from_str::<LiveAllGameData>(&body)
         .map_err(|e| format!("Live Client allgamedata parse error: {}", e))
 }

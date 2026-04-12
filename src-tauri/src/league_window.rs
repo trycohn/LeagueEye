@@ -16,7 +16,16 @@ pub struct LeagueWindowVisibilityPayload {
 }
 
 pub fn current_visibility() -> bool {
-    if refresh_fullscreen_overlay_blocked() {
+    let start = std::time::Instant::now();
+    let blocked = refresh_fullscreen_overlay_blocked();
+    let elapsed = start.elapsed();
+    if elapsed.as_millis() > 50 {
+        log::warn!(
+            "[perf] current_visibility: refresh_fullscreen_overlay_blocked took {:?}",
+            elapsed
+        );
+    }
+    if blocked {
         return false;
     }
 
@@ -34,7 +43,7 @@ pub fn start_monitor(app: AppHandle) {
         let mut fullscreen_overlay_blocked = refresh_fullscreen_overlay_blocked();
 
         loop {
-            if last_block_refresh.elapsed() >= Duration::from_millis(1000) {
+            if last_block_refresh.elapsed() >= Duration::from_millis(5000) {
                 fullscreen_overlay_blocked = refresh_fullscreen_overlay_blocked();
                 last_block_refresh = Instant::now();
             }
@@ -59,16 +68,27 @@ pub fn start_monitor(app: AppHandle) {
 
 fn refresh_fullscreen_overlay_blocked() -> bool {
     #[cfg(target_os = "windows")]
-    let blocked = if crate::lcu::is_game_fullscreen_mode() {
-        if let Some(creds) = crate::lcu::detect_lcu_credentials() {
-            crate::lcu::get_gameflow_phase(&creds)
-                .map(|phase| crate::overlay_policy::allows_overlay_for_phase(&phase))
-                .unwrap_or(false)
+    let blocked = {
+        let start = std::time::Instant::now();
+        let result = if crate::lcu::is_game_fullscreen_mode() {
+            if let Some(creds) = crate::lcu::detect_lcu_credentials() {
+                crate::lcu::get_gameflow_phase(&creds)
+                    .map(|phase| crate::overlay_policy::allows_overlay_for_phase(&phase))
+                    .unwrap_or(false)
+            } else {
+                false
+            }
         } else {
             false
+        };
+        let elapsed = start.elapsed();
+        if elapsed.as_millis() > 100 {
+            log::warn!(
+                "[perf] refresh_fullscreen_overlay_blocked took {:?}",
+                elapsed
+            );
         }
-    } else {
-        false
+        result
     };
 
     #[cfg(not(target_os = "windows"))]
@@ -157,17 +177,14 @@ mod platform {
     }
 
     fn process_name_from_pid(process_id: Dword) -> Option<String> {
-        let handle =
-            unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
         if handle == 0 {
             return None;
         }
 
         let mut buffer = [0u16; PROCESS_NAME_BUFFER_LEN];
         let mut size = buffer.len() as Dword;
-        let ok = unsafe {
-            QueryFullProcessImageNameW(handle, 0, buffer.as_mut_ptr(), &mut size)
-        };
+        let ok = unsafe { QueryFullProcessImageNameW(handle, 0, buffer.as_mut_ptr(), &mut size) };
         unsafe {
             CloseHandle(handle);
         }
@@ -186,7 +203,9 @@ mod platform {
             return false;
         };
 
-        OVERLAY_TITLES.iter().any(|overlay_title| title == *overlay_title)
+        OVERLAY_TITLES
+            .iter()
+            .any(|overlay_title| title == *overlay_title)
     }
 
     fn is_league_process_name(process_name: &str) -> bool {

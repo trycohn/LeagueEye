@@ -11,14 +11,16 @@ import { LiveGameView } from "./components/LiveGameView";
 import { useRiotApi } from "./hooks/useRiotApi";
 import { useLiveGame } from "./hooks/useLiveGame";
 import { useOverlayLifecycle } from "./hooks/useOverlayLifecycle";
+import { useUpdater } from "./hooks/useUpdater";
 import { HomeView } from "./components/HomeView";
-import { Eye, AlertCircle, Loader2, ChevronLeft } from "lucide-react";
+import { SettingsView } from "./components/SettingsView";
+import { Eye, AlertCircle, Loader2, ChevronLeft, Settings } from "lucide-react";
 import type { DetectedAccount } from "./lib/types";
 
-type View = "home" | "profile" | "live";
+type View = "home" | "profile" | "live" | "settings";
 type LeagueWindowVisibilityPayload = { visible: boolean };
 
-const POLL_INTERVAL_MS = 8_000;
+const POLL_INTERVAL_MS = 4_000;
 
 export default function App() {
   const {
@@ -49,6 +51,7 @@ export default function App() {
 
   const { liveData, phase } = useLiveGame(clientOnline);
   const overlayEligible = useOverlayLifecycle(clientOnline);
+  const { updateAvailable } = useUpdater();
   const isLive = phase === "champ_select" || phase === "in_game";
 
   // Автопереключение на live view + отдельная политика видимости оверлея.
@@ -251,6 +254,17 @@ export default function App() {
               onClick={handleBadgeClick}
             />
           )}
+
+          <button
+            onClick={() => setView("settings")}
+            className="relative p-2 rounded-sm text-text-muted hover:text-text-primary hover:bg-[#1e2130] transition-colors"
+            title="Настройки"
+          >
+            <Settings size={20} />
+            {updateAvailable && (
+              <div className="absolute top-1 right-1 w-2 h-2 rounded-full bg-[#3b82f6] animate-pulse" />
+            )}
+          </button>
         </div>
       </header>
 
@@ -276,6 +290,20 @@ export default function App() {
             <HomeView
               onSearch={handleSearch}
             />
+          </div>
+        )}
+
+        {/* SETTINGS VIEW */}
+        {view === "settings" && (
+          <div className="flex flex-col gap-5">
+            <button
+              onClick={goHome}
+              className="flex items-center gap-1 text-text-muted hover:text-text-primary text-sm transition-colors w-fit"
+            >
+              <ChevronLeft size={16} />
+              Назад
+            </button>
+            <SettingsView />
           </div>
         )}
 

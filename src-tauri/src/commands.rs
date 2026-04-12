@@ -76,7 +76,8 @@ pub async fn detect_account(
     api: State<'_, ServerApiClient>,
     db: State<'_, SharedDb>,
 ) -> Result<DetectedAccount, String> {
-    let creds = lcu::detect_lcu_credentials()
+    // User-initiated action — bypass credential cache to get fresh data
+    let creds = lcu::detect_lcu_credentials_fresh()
         .ok_or_else(|| "League Client не запущен".to_string())?;
 
     let identity = lcu::get_lcu_identity(&creds).await?;
@@ -103,7 +104,12 @@ pub async fn detect_account(
 
 #[tauri::command]
 pub async fn poll_client_status() -> bool {
+    let start = std::time::Instant::now();
     let running = lcu::is_lcu_running();
+    let elapsed = start.elapsed();
+    if elapsed.as_millis() > 50 {
+        log::warn!("[perf] poll_client_status took {:?}", elapsed);
+    }
     if !running {
         crate::keyboard_hook::set_game_active(false);
     }
@@ -111,8 +117,13 @@ pub async fn poll_client_status() -> bool {
 }
 
 #[tauri::command]
-pub fn get_overlay_eligibility() -> bool {
+pub async fn get_overlay_eligibility() -> bool {
+    let start = std::time::Instant::now();
     let eligible = crate::overlay_policy::current_overlay_eligibility();
+    let elapsed = start.elapsed();
+    if elapsed.as_millis() > 50 {
+        log::warn!("[perf] get_overlay_eligibility took {:?} (async, off main thread)", elapsed);
+    }
     crate::keyboard_hook::set_game_active(eligible);
     eligible
 }
@@ -201,6 +212,8 @@ pub async fn get_live_game(
     champ_cache: State<'_, Arc<Mutex<ChampionNamesCache>>>,
     last_live: State<'_, Arc<Mutex<LastLiveState>>>,
 ) -> Result<LiveGameData, String> {
+    let cmd_start = std::time::Instant::now();
+
     let none_result = LiveGameData {
         phase: "none".to_string(),
         queue_id: None,
@@ -211,16 +224,29 @@ pub async fn get_live_game(
         timer: None,
     };
 
+    let t0 = std::time::Instant::now();
     let creds = match lcu::detect_lcu_credentials() {
         Some(c) => c,
         None => {
+            let elapsed = t0.elapsed();
+            if elapsed.as_millis() > 50 {
+                log::warn!("[perf] get_live_game: detect_lcu_credentials (no creds) took {:?}", elapsed);
+            }
             crate::keyboard_hook::set_game_active(false);
             if let Ok(mut ls) = last_live.lock() { ls.data = None; }
             return Ok(none_result);
         }
     };
+    let creds_elapsed = t0.elapsed();
 
+    let t1 = std::time::Instant::now();
     let gameflow_phase = lcu::get_gameflow_phase(&creds).unwrap_or_default();
+    let phase_elapsed = t1.elapsed();
+
+    if creds_elapsed.as_millis() > 50 || phase_elapsed.as_millis() > 50 {
+        log::warn!("[perf] get_live_game: creds={:?}, gameflow_phase={:?}, phase={}", creds_elapsed, phase_elapsed, gameflow_phase);
+    }
+
     log::debug!("[live] gameflow_phase = {:?}", gameflow_phase);
 
     let is_champ_select = gameflow_phase == "ChampSelect";
@@ -310,6 +336,94 @@ pub async fn get_live_game(
                 queue_id: None,
             };
 
+            // Two-phase poll: if we already have enriched data from a previous poll,
+            // return fresh LCU data merged with cached ranks immediately, then
+            // refresh enrichment in the background for the next poll.
+            let has_cached_ranks = {
+                if let Ok(ls) = last_live.lock() {
+                    ls.data.as_ref()
+                        .filter(|d| d.phase == "champ_select")
+                        .map(|d| d.my_team.iter().chain(d.enemy_team.iter()).any(|p| p.rank.is_some()))
+                        .unwrap_or(false)
+                } else {
+                    false
+                }
+            };
+
+            if has_cached_ranks {
+                // Build immediate result with fresh LCU data + cached ranks
+                let cached_data = last_live.lock().ok()
+                    .and_then(|ls| ls.data.clone());
+
+                let build_player = |p: &EnrichLivePlayer, cached: &Option<LiveGameData>| -> LivePlayer {
+                    // Try to find matching rank from cached data by puuid or position
+                    let rank = cached.as_ref().and_then(|cd| {
+                        let team = if p.team_id == 100 { &cd.my_team } else { &cd.enemy_team };
+                        // Match by puuid first
+                        if let Some(ref puuid) = p.puuid {
+                            if let Some(found) = team.iter().find(|cp| cp.puuid.as_deref() == Some(puuid)) {
+                                return found.rank.clone();
+                            }
+                        }
+                        // Fallback: match by position in team
+                        let idx = if p.team_id == 100 {
+                            request.players.iter().filter(|rp| rp.team_id == 100).position(|rp| std::ptr::eq(rp, p))
+                        } else {
+                            request.players.iter().filter(|rp| rp.team_id == 200).position(|rp| std::ptr::eq(rp, p))
+                        };
+                        idx.and_then(|i| team.get(i)).and_then(|cp| cp.rank.clone())
+                    });
+
+                    LivePlayer {
+                        puuid: p.puuid.clone(),
+                        game_name: p.game_name.clone(),
+                        tag_line: p.tag_line.clone(),
+                        champion_id: p.champion_id,
+                        assigned_position: p.assigned_position.clone(),
+                        spell1_id: p.spell1_id,
+                        spell2_id: p.spell2_id,
+                        team_id: p.team_id,
+                        rank,
+                        is_picking: p.is_picking,
+                    }
+                };
+
+                let result = LiveGameData {
+                    phase: "champ_select".to_string(),
+                    queue_id: None,
+                    my_team: request.players.iter().filter(|p| p.team_id == 100)
+                        .map(|p| build_player(p, &cached_data)).collect(),
+                    enemy_team: request.players.iter().filter(|p| p.team_id == 200)
+                        .map(|p| build_player(p, &cached_data)).collect(),
+                    bans: request.bans.clone(),
+                    game_time: None,
+                    timer: request.timer.clone(),
+                };
+
+                // Fire background enrichment to update ranks for next poll
+                let api_bg = api.inner().clone();
+                let last_live_bg = last_live.inner().clone();
+                tokio::spawn(async move {
+                    match api_bg.enrich_live_game(&request).await {
+                        Ok(enriched) => {
+                            if let Ok(mut ls) = last_live_bg.lock() {
+                                ls.data = Some(enriched);
+                            }
+                        }
+                        Err(e) => {
+                            log::debug!("[live] Background enrichment failed: {}", e);
+                        }
+                    }
+                });
+
+                let cmd_elapsed = cmd_start.elapsed();
+                if cmd_elapsed.as_millis() > 200 {
+                    log::warn!("[perf] get_live_game (champ_select, cached ranks) total: {:?}", cmd_elapsed);
+                }
+                return Ok(result);
+            }
+
+            // No cached ranks yet — do synchronous enrichment (first poll)
             match api.enrich_live_game(&request).await {
                 Ok(result) => {
                     if let Ok(mut ls) = last_live.lock() { ls.data = Some(result.clone()); }
@@ -1041,4 +1155,79 @@ pub async fn get_gold_comparison(
     }
 
     Ok(GoldComparisonData { lanes, game_time })
+}
+
+// ─── App version & updates ──────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInfo {
+    pub version: String,
+    pub body: Option<String>,
+    pub date: Option<String>,
+}
+
+#[tauri::command]
+pub async fn check_for_update(
+    app: tauri::AppHandle,
+) -> Result<Option<UpdateInfo>, String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let updater = app.updater().map_err(|e| format!("Updater init error: {}", e))?;
+
+    match updater.check().await {
+        Ok(Some(update)) => {
+            Ok(Some(UpdateInfo {
+                version: update.version.clone(),
+                body: update.body.clone(),
+                date: update.date.map(|d| d.to_string()),
+            }))
+        }
+        Ok(None) => Ok(None),
+        Err(e) => {
+            log::warn!("[updater] Check failed: {}", e);
+            Err(format!("Ошибка проверки обновлений: {}", e))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn install_update(
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let updater = app.updater().map_err(|e| format!("Updater init error: {}", e))?;
+
+    let update = updater.check().await
+        .map_err(|e| format!("Ошибка проверки: {}", e))?
+        .ok_or_else(|| "Нет доступных обновлений".to_string())?;
+
+    log::info!("[updater] Downloading and installing v{}", update.version);
+
+    // Download and install
+    let mut downloaded: u64 = 0;
+    update.download_and_install(
+        |chunk_len, content_len| {
+            downloaded += chunk_len as u64;
+            log::debug!(
+                "[updater] Downloaded {} / {}",
+                downloaded,
+                content_len.unwrap_or(0)
+            );
+        },
+        || {
+            log::info!("[updater] Download complete, installing...");
+        },
+    )
+    .await
+    .map_err(|e| format!("Ошибка установки: {}", e))?;
+
+    log::info!("[updater] Update installed, relaunching...");
+    app.restart();
 }
