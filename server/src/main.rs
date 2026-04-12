@@ -97,6 +97,9 @@ async fn main() {
         .route("/api/live/enrich", post(routes::live::enrich_live_game))
         // AI Coach streaming
         .route("/api/coach/stream", post(routes::coach::stream_coach))
+        // Updates
+        .route("/api/updates/{target}/{arch}/{current_version}", get(routes::updates::check_update))
+        .route("/api/updates/download/{filename}", get(routes::updates::download_update))
         .layer(cors)
         .with_state(state);
 

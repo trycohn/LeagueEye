@@ -103,8 +103,7 @@ Determine how to proceed based on what was provided in `<input_document>`.
 
    **Option C: Continue on the default branch**
    - Requires explicit user confirmation
-   - Only proceed after user explicitly says "yes, commit to [default_branch]"
-   - Never commit directly to the default branch without explicit permission
+   - Only proceed after the user explicitly agrees to work directly on `[default_branch]`
 
    **Recommendation**: Use worktree if:
    - You want to work on multiple features simultaneously
@@ -161,7 +160,6 @@ Determine how to proceed based on what was provided in `<input_document>`.
      - Run tests after changes
      - Assess testing coverage: did this task change behavior? If yes, were tests written or updated? If no tests were added, is the justification deliberate (e.g., pure config, no behavioral change)?
      - Mark task as completed
-     - Evaluate for incremental commit (see below)
    ```
 
    When a unit carries an `Execution note`, honor it. For test-first units, write the failing test before implementation for that unit. For characterization-first units, capture existing behavior before changing it. For units without an `Execution note`, proceed pragmatically.
@@ -198,38 +196,7 @@ Determine how to proceed based on what was provided in `<input_document>`.
    **When this matters most:** Any change that touches models with callbacks, error handling with fallback/retry, or functionality exposed through multiple interfaces.
 
 
-2. **Incremental Commits**
-
-   After completing each task, evaluate whether to create an incremental commit:
-
-   | Commit when... | Don't commit when... |
-   |----------------|---------------------|
-   | Logical unit complete (model, service, component) | Small part of a larger unit |
-   | Tests pass + meaningful progress | Tests failing |
-   | About to switch contexts (backend → frontend) | Purely scaffolding with no behavior |
-   | About to attempt risky/uncertain changes | Would need a "WIP" commit message |
-
-   **Heuristic:** "Can I write a commit message that describes a complete, valuable change? If yes, commit. If the message would be 'WIP' or 'partial X', wait."
-
-   If the plan has Implementation Units, use them as a starting guide for commit boundaries — but adapt based on what you find during implementation. A unit might need multiple commits if it's larger than expected, or small related units might land together. Use each unit's Goal to inform the commit message.
-
-   **Commit workflow:**
-   ```bash
-   # 1. Verify tests pass (use project's test command)
-   # Examples: bin/rails test, npm test, pytest, go test, etc.
-
-   # 2. Stage only files related to this logical unit (not `git add .`)
-   git add <files related to this logical unit>
-
-   # 3. Commit with conventional message
-   git commit -m "feat(scope): description of this unit"
-   ```
-
-   **Handling merge conflicts:** If conflicts arise during rebasing or merging, resolve them immediately. Incremental commits make conflict resolution easier since each commit is small and focused.
-
-   **Note:** Incremental commits use clean conventional messages without attribution footers. The final Phase 4 commit/PR includes the full attribution.
-
-3. **Follow Existing Patterns**
+2. **Follow Existing Patterns**
 
    - The plan should reference similar code - read those files first
    - Match naming conventions exactly
@@ -237,7 +204,7 @@ Determine how to proceed based on what was provided in `<input_document>`.
    - Follow project coding standards (see AGENTS.md; use CLAUDE.md only if the repo still keeps a compatibility shim)
    - When in doubt, grep for similar implementations
 
-4. **Test Continuously**
+3. **Test Continuously**
 
    - Run relevant tests after each significant change
    - Don't wait until the end to test
@@ -245,7 +212,7 @@ Determine how to proceed based on what was provided in `<input_document>`.
    - Add new tests for new behavior, update tests for changed behavior, remove tests for deleted behavior
    - **Unit tests with mocks prove logic in isolation. Integration tests with real objects prove the layers work together.** If your change touches callbacks, middleware, or error handling — you need both.
 
-5. **Simplify as You Go**
+4. **Simplify as You Go**
 
    After completing a cluster of related implementation units (or every 2-3 units), review recently changed files for simplification opportunities — consolidate duplicated patterns, extract shared helpers, and improve code reuse and efficiency. This is especially valuable when using subagents, since each agent works with isolated context and can't see patterns emerging across units.
 
@@ -253,7 +220,7 @@ Determine how to proceed based on what was provided in `<input_document>`.
 
    If a `/simplify` skill or equivalent is available, use it. Otherwise, review the changed files yourself for reuse and consolidation opportunities.
 
-6. **Figma Design Sync** (if applicable)
+5. **Figma Design Sync** (if applicable)
 
    For UI work with Figma designs:
 
@@ -279,7 +246,7 @@ Determine how to proceed based on what was provided in `<input_document>`.
    # Examples: bin/rails test, npm test, pytest, go test, etc.
 
    # Run linting (per AGENTS.md)
-   # Use linting-agent before pushing to origin
+   # Use linting-agent before handoff
    ```
 
 2. **Code Review** (REQUIRED)
@@ -318,7 +285,7 @@ Determine how to proceed based on what was provided in `<input_document>`.
 
 1. **Capture and Upload Screenshots for UI Changes** (REQUIRED for any UI work)
 
-   For **any** design changes, new views, or UI modifications, capture and upload screenshots before creating the PR:
+   For **any** design changes, new views, or UI modifications, capture and upload screenshots so the user can attach them when opening a PR:
 
    **Step 1: Start dev server** (if not running)
    ```bash
@@ -346,18 +313,16 @@ Determine how to proceed based on what was provided in `<input_document>`.
    - **Modified screens**: Before AND after screenshots
    - **Design implementation**: Screenshot showing Figma design match
 
-2. **Commit and Create Pull Request**
+2. **Handoff (user commits and opens PR)**
 
-   Load the `git-commit-push-pr` skill to handle committing, pushing, and PR creation. The skill handles convention detection, branch safety, logical commit splitting, adaptive PR descriptions, and attribution badges.
+   Do **not** create commits, push, or open pull requests unless the user explicitly asks for that in this session. The user commits and pushes after the work is done.
 
-   When providing context for the PR description, include:
+   Give the user a **paste-ready handoff** they can use for the PR description:
    - The plan's summary and key decisions
    - Testing notes (tests added/modified, manual testing performed)
    - Screenshot URLs from step 1 (if applicable)
    - Figma design link (if applicable)
    - The Post-Deploy Monitoring & Validation section (see Phase 3 Step 4)
-
-   If the user prefers to commit without creating a PR, load the `git-commit` skill instead.
 
 3. **Update Plan Status**
 
@@ -368,7 +333,6 @@ Determine how to proceed based on what was provided in `<input_document>`.
 
 4. **Notify User**
    - Summarize what was completed
-   - Link to PR (if one was created)
    - Note any follow-up work needed
    - Suggest next steps if applicable
 
@@ -425,7 +389,7 @@ Most plans should use subagent dispatch from standard mode. Agent teams add sign
 
 - Follow existing patterns
 - Write tests for new code
-- Run linting before pushing
+- Run linting before handoff
 - Review every change — inline for simple additive work, full review for everything else
 
 ### Ship Complete Features
@@ -436,7 +400,7 @@ Most plans should use subagent dispatch from standard mode. Agent teams add sign
 
 ## Quality Checklist
 
-Before creating PR, verify:
+Before handoff, verify:
 
 - [ ] All clarifying questions asked and answered
 - [ ] All tasks marked completed
@@ -445,11 +409,10 @@ Before creating PR, verify:
 - [ ] Code follows existing patterns
 - [ ] Figma designs match implementation (if applicable)
 - [ ] Before/after screenshots captured and uploaded (for UI changes)
-- [ ] Commit messages follow conventional format
-- [ ] PR description includes Post-Deploy Monitoring & Validation section (or explicit no-impact rationale)
+- [ ] Handoff text includes Post-Deploy Monitoring & Validation section (or explicit no-impact rationale) for the user's PR
 - [ ] Code review completed (inline self-review or full `ce:review`)
-- [ ] PR description includes summary, testing notes, and screenshots
-- [ ] PR description includes Compound Engineered badge with accurate model and harness
+- [ ] Handoff text includes summary, testing notes, and screenshots for the user's PR
+- [ ] Handoff text includes Compound Engineered badge with accurate model and harness for the user's PR
 
 ## Code Review Tiers
 

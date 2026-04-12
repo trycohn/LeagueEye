@@ -1042,3 +1042,78 @@ pub async fn get_gold_comparison(
 
     Ok(GoldComparisonData { lanes, game_time })
 }
+
+// ─── App version & updates ──────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInfo {
+    pub version: String,
+    pub body: Option<String>,
+    pub date: Option<String>,
+}
+
+#[tauri::command]
+pub async fn check_for_update(
+    app: tauri::AppHandle,
+) -> Result<Option<UpdateInfo>, String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let updater = app.updater().map_err(|e| format!("Updater init error: {}", e))?;
+
+    match updater.check().await {
+        Ok(Some(update)) => {
+            Ok(Some(UpdateInfo {
+                version: update.version.clone(),
+                body: update.body.clone(),
+                date: update.date.map(|d| d.to_string()),
+            }))
+        }
+        Ok(None) => Ok(None),
+        Err(e) => {
+            log::warn!("[updater] Check failed: {}", e);
+            Err(format!("Ошибка проверки обновлений: {}", e))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn install_update(
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let updater = app.updater().map_err(|e| format!("Updater init error: {}", e))?;
+
+    let update = updater.check().await
+        .map_err(|e| format!("Ошибка проверки: {}", e))?
+        .ok_or_else(|| "Нет доступных обновлений".to_string())?;
+
+    log::info!("[updater] Downloading and installing v{}", update.version);
+
+    // Download and install
+    let mut downloaded: u64 = 0;
+    update.download_and_install(
+        |chunk_len, content_len| {
+            downloaded += chunk_len as u64;
+            log::debug!(
+                "[updater] Downloaded {} / {}",
+                downloaded,
+                content_len.unwrap_or(0)
+            );
+        },
+        || {
+            log::info!("[updater] Download complete, installing...");
+        },
+    )
+    .await
+    .map_err(|e| format!("Ошибка установки: {}", e))?;
+
+    log::info!("[updater] Update installed, relaunching...");
+    app.restart();
+}

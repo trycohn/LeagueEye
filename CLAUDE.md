@@ -107,11 +107,12 @@ Tauri managed state: `ServerApiClient`, `SharedDb`, `CoachState`, `ChampionNames
 
 Triple Vite entry points: `index.html` (main app), `overlay.html` (coach overlay), `gold-overlay.html` (gold comparison overlay).
 
-- **App.tsx** — 3 views: "home", "profile", "live". Auto-switches to "live" during champ select/in-game (1.5s debounce to avoid flicker). Shows/hides overlay windows automatically, but only when overlay eligibility and League window visibility both allow it
+- **App.tsx** — 4 views: "home", "profile", "live", "settings". Auto-switches to "live" during champ select/in-game (1.5s debounce to avoid flicker). Shows/hides overlay windows automatically, but only when overlay eligibility and League window visibility both allow it. Settings gear icon in header with blue dot indicator when update is available
 - **hooks/useRiotApi.ts** — Profile, matches, mastery, champion stats. State machine with `genRef` (aborts stale ops), `busyRef` (prevents concurrent searches), `lastSearchRef` (caches last result)
 - **hooks/useLiveGame.ts** — Adaptive polling: 2s (champ select), 5s (in-game), 3s (idle). Guards against overlapping polls with `pollingRef` / `requestIdRef`
 - **hooks/useOverlayLifecycle.ts** — 500ms polling of Tauri overlay eligibility (`get_overlay_eligibility`)
 - **hooks/useAiCoach.ts** — Module-level persistent state (survives remount). Single global listener for `coach-stream` Tauri event. Accumulates streaming text into messages
+- **hooks/useUpdater.ts** — Module-level persistent state for update status. Auto-checks on startup (5s delay), periodic checks every 4h. States: idle → checking → available/up-to-date → downloading
 - **hooks/useChampionNames.ts** — DDragon champion ID-to-name cache
 - **components/OverlayApp.tsx** — Coach overlay UI. Auto-resizes the window, listens for `hotkey-coach-trigger`, Shift+drag to move
 - **components/GoldOverlayApp.tsx** — Gold comparison overlay UI. Polls `get_gold_comparison`, auto-resizes, Shift+drag to move
@@ -140,6 +141,8 @@ Client: api_client reads SSE → app.emit("coach-stream") → React useAiCoach h
 | GET | `/api/matches/{match_id}` | Match detail (all 10 players) |
 | POST | `/api/live/enrich` | Enrich LCU data with ranks |
 | POST | `/api/coach/stream` | SSE AI coaching |
+| GET | `/api/updates/{target}/{arch}/{current_version}` | Check for app updates (Tauri updater endpoint) |
+| GET | `/api/updates/download/{filename}` | Download update artifact |
 
 ### Files That Must Stay in Sync
 
