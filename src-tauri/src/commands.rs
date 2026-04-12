@@ -104,7 +104,12 @@ pub async fn detect_account(
 
 #[tauri::command]
 pub async fn poll_client_status() -> bool {
+    let start = std::time::Instant::now();
     let running = lcu::is_lcu_running();
+    let elapsed = start.elapsed();
+    if elapsed.as_millis() > 50 {
+        log::warn!("[perf] poll_client_status took {:?}", elapsed);
+    }
     if !running {
         crate::keyboard_hook::set_game_active(false);
     }
@@ -112,8 +117,13 @@ pub async fn poll_client_status() -> bool {
 }
 
 #[tauri::command]
-pub fn get_overlay_eligibility() -> bool {
+pub async fn get_overlay_eligibility() -> bool {
+    let start = std::time::Instant::now();
     let eligible = crate::overlay_policy::current_overlay_eligibility();
+    let elapsed = start.elapsed();
+    if elapsed.as_millis() > 50 {
+        log::warn!("[perf] get_overlay_eligibility took {:?} (async, off main thread)", elapsed);
+    }
     crate::keyboard_hook::set_game_active(eligible);
     eligible
 }
@@ -202,6 +212,8 @@ pub async fn get_live_game(
     champ_cache: State<'_, Arc<Mutex<ChampionNamesCache>>>,
     last_live: State<'_, Arc<Mutex<LastLiveState>>>,
 ) -> Result<LiveGameData, String> {
+    let cmd_start = std::time::Instant::now();
+
     let none_result = LiveGameData {
         phase: "none".to_string(),
         queue_id: None,
@@ -212,16 +224,29 @@ pub async fn get_live_game(
         timer: None,
     };
 
+    let t0 = std::time::Instant::now();
     let creds = match lcu::detect_lcu_credentials() {
         Some(c) => c,
         None => {
+            let elapsed = t0.elapsed();
+            if elapsed.as_millis() > 50 {
+                log::warn!("[perf] get_live_game: detect_lcu_credentials (no creds) took {:?}", elapsed);
+            }
             crate::keyboard_hook::set_game_active(false);
             if let Ok(mut ls) = last_live.lock() { ls.data = None; }
             return Ok(none_result);
         }
     };
+    let creds_elapsed = t0.elapsed();
 
+    let t1 = std::time::Instant::now();
     let gameflow_phase = lcu::get_gameflow_phase(&creds).unwrap_or_default();
+    let phase_elapsed = t1.elapsed();
+
+    if creds_elapsed.as_millis() > 50 || phase_elapsed.as_millis() > 50 {
+        log::warn!("[perf] get_live_game: creds={:?}, gameflow_phase={:?}, phase={}", creds_elapsed, phase_elapsed, gameflow_phase);
+    }
+
     log::debug!("[live] gameflow_phase = {:?}", gameflow_phase);
 
     let is_champ_select = gameflow_phase == "ChampSelect";

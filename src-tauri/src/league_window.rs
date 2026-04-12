@@ -16,7 +16,16 @@ pub struct LeagueWindowVisibilityPayload {
 }
 
 pub fn current_visibility() -> bool {
-    if refresh_fullscreen_overlay_blocked() {
+    let start = std::time::Instant::now();
+    let blocked = refresh_fullscreen_overlay_blocked();
+    let elapsed = start.elapsed();
+    if elapsed.as_millis() > 50 {
+        log::warn!(
+            "[perf] current_visibility: refresh_fullscreen_overlay_blocked took {:?}",
+            elapsed
+        );
+    }
+    if blocked {
         return false;
     }
 
@@ -59,16 +68,27 @@ pub fn start_monitor(app: AppHandle) {
 
 fn refresh_fullscreen_overlay_blocked() -> bool {
     #[cfg(target_os = "windows")]
-    let blocked = if crate::lcu::is_game_fullscreen_mode() {
-        if let Some(creds) = crate::lcu::detect_lcu_credentials() {
-            crate::lcu::get_gameflow_phase(&creds)
-                .map(|phase| crate::overlay_policy::allows_overlay_for_phase(&phase))
-                .unwrap_or(false)
+    let blocked = {
+        let start = std::time::Instant::now();
+        let result = if crate::lcu::is_game_fullscreen_mode() {
+            if let Some(creds) = crate::lcu::detect_lcu_credentials() {
+                crate::lcu::get_gameflow_phase(&creds)
+                    .map(|phase| crate::overlay_policy::allows_overlay_for_phase(&phase))
+                    .unwrap_or(false)
+            } else {
+                false
+            }
         } else {
             false
+        };
+        let elapsed = start.elapsed();
+        if elapsed.as_millis() > 100 {
+            log::warn!(
+                "[perf] refresh_fullscreen_overlay_blocked took {:?}",
+                elapsed
+            );
         }
-    } else {
-        false
+        result
     };
 
     #[cfg(not(target_os = "windows"))]

@@ -9,10 +9,11 @@ use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-// ── LCU credential & install-dir caches ─────────────────────────────────────
+// ── LCU credential & install-dir & gameflow caches ──────────────────────────
 
 const CREDENTIALS_CACHE_TTL: Duration = Duration::from_secs(3);
 const INSTALL_DIR_CACHE_TTL: Duration = Duration::from_secs(60);
+const GAMEFLOW_CACHE_TTL: Duration = Duration::from_secs(2);
 
 struct CachedCredentials {
     value: Option<LcuCredentials>,
@@ -24,8 +25,15 @@ struct CachedInstallDir {
     updated_at: Instant,
 }
 
+struct CachedGameflowPhase {
+    value: Result<String, String>,
+    port: u16,
+    updated_at: Instant,
+}
+
 static CREDENTIALS_CACHE: Mutex<Option<CachedCredentials>> = Mutex::new(None);
 static INSTALL_DIR_CACHE: Mutex<Option<CachedInstallDir>> = Mutex::new(None);
+static GAMEFLOW_CACHE: Mutex<Option<CachedGameflowPhase>> = Mutex::new(None);
 
 #[derive(Debug, Clone)]
 pub struct LcuCredentials {
@@ -122,7 +130,12 @@ pub fn detect_lcu_credentials() -> Option<LcuCredentials> {
         }
     }
 
+    let start = std::time::Instant::now();
     let result = detect_lcu_credentials_fresh();
+    let elapsed = start.elapsed();
+    if elapsed.as_millis() > 100 {
+        log::warn!("[perf] detect_lcu_credentials_fresh (cache miss) took {:?}, found={}", elapsed, result.is_some());
+    }
 
     if let Ok(mut guard) = CREDENTIALS_CACHE.lock() {
         *guard = Some(CachedCredentials {
@@ -262,6 +275,7 @@ fn try_read_lockfile(path: &Path) -> Option<LcuCredentials> {
 }
 
 fn find_league_dir_from_process() -> Option<PathBuf> {
+    let start = std::time::Instant::now();
     let ps_cmd = r#"
         $procs = Get-WmiObject Win32_Process |
             Where-Object { $_.Name -like '*League*' -or $_.Name -like '*Riot*' } |
@@ -275,6 +289,8 @@ fn find_league_dir_from_process() -> Option<PathBuf> {
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .ok()?;
+    let elapsed = start.elapsed();
+    log::warn!("[perf] find_league_dir_from_process (PowerShell) took {:?}", elapsed);
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     for line in stdout.lines() {
@@ -298,11 +314,16 @@ fn find_league_dir_from_process() -> Option<PathBuf> {
 /// Uses system curl.exe to bypass TLS compatibility issues with reqwest/rustls
 fn curl_lcu(port: u16, token: &str, path: &str) -> Result<String, String> {
     let url = format!("https://127.0.0.1:{}{}", port, path);
+    let start = std::time::Instant::now();
     let output = Command::new("curl.exe")
         .args(["-sk", "--max-time", "5", "-u", &format!("riot:{}", token), &url])
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("curl.exe error: {}", e))?;
+    let elapsed = start.elapsed();
+    if elapsed.as_millis() > 100 {
+        log::warn!("[perf] curl_lcu({}) took {:?}", path, elapsed);
+    }
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -354,11 +375,34 @@ pub fn is_lcu_running() -> bool {
     detect_lcu_credentials().is_some()
 }
 
-/// Returns the current gameflow phase from the LCU.
+/// Returns the current gameflow phase from the LCU (cached with 2s TTL).
 /// Possible values: "None", "Lobby", "Matchmaking", "ReadyCheck",
 /// "ChampSelect", "GameStart", "InProgress", "WaitingForStats",
 /// "EndOfGame", "Reconnect", etc.
 pub fn get_gameflow_phase(creds: &LcuCredentials) -> Result<String, String> {
+    // Return cached result if same port and TTL not expired
+    if let Ok(guard) = GAMEFLOW_CACHE.lock() {
+        if let Some(cached) = guard.as_ref() {
+            if cached.port == creds.port && cached.updated_at.elapsed() < GAMEFLOW_CACHE_TTL {
+                return cached.value.clone();
+            }
+        }
+    }
+
+    let result = get_gameflow_phase_fresh(creds);
+
+    if let Ok(mut guard) = GAMEFLOW_CACHE.lock() {
+        *guard = Some(CachedGameflowPhase {
+            value: result.clone(),
+            port: creds.port,
+            updated_at: Instant::now(),
+        });
+    }
+
+    result
+}
+
+fn get_gameflow_phase_fresh(creds: &LcuCredentials) -> Result<String, String> {
     let body = curl_lcu(creds.port, &creds.token, "/lol-gameflow/v1/gameflow-phase")?;
     // The response is a JSON string like "InProgress" (with quotes)
     let phase = body.trim().trim_matches('"').to_string();
@@ -378,11 +422,16 @@ pub struct LiveClientPlayer {
 }
 
 pub fn get_live_client_playerlist() -> Result<Vec<LiveClientPlayer>, String> {
+    let start = std::time::Instant::now();
     let output = Command::new("curl.exe")
         .args(["-sk", "--max-time", "2", "https://127.0.0.1:2999/liveclientdata/playerlist"])
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("curl.exe error: {}", e))?;
+    let elapsed = start.elapsed();
+    if elapsed.as_millis() > 100 {
+        log::warn!("[perf] get_live_client_playerlist (curl) took {:?}", elapsed);
+    }
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if stdout.is_empty() || stdout.contains("\"errorCode\"") {
@@ -542,11 +591,16 @@ pub struct LiveGameInfo {
 }
 
 pub fn get_live_client_allgamedata() -> Result<LiveAllGameData, String> {
+    let start = std::time::Instant::now();
     let output = Command::new("curl.exe")
         .args(["-sk", "--max-time", "3", "https://127.0.0.1:2999/liveclientdata/allgamedata"])
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("curl.exe error: {}", e))?;
+    let elapsed = start.elapsed();
+    if elapsed.as_millis() > 100 {
+        log::warn!("[perf] get_live_client_allgamedata (curl) took {:?}", elapsed);
+    }
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if stdout.is_empty() || stdout.contains("\"errorCode\"") {
