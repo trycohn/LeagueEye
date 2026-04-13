@@ -14,9 +14,22 @@ let persistedError: string | null = null;
 let listenerActive = false;
 let onStateChange: (() => void) | null = null;
 
+function resetState() {
+  persistedMessages = [];
+  persistedStream = "";
+  persistedIsStreaming = false;
+  persistedError = null;
+  onStateChange?.();
+}
+
 function ensureListener() {
   if (listenerActive) return;
   listenerActive = true;
+
+  // Сброс истории при начале нового матча (событие из App.tsx, приходит во все webview)
+  listen("coach-reset", () => {
+    resetState();
+  });
 
   listen<CoachStreamPayload>("coach-stream", (event) => {
     const { kind, text } = event.payload;
@@ -97,8 +110,7 @@ export function useAiCoach() {
   }, []);
 
   const clearMessages = useCallback(() => {
-    persistedMessages = [];
-    persistedError = null;
+    resetState();
     forceUpdate((n: number) => n + 1);
   }, []);
 

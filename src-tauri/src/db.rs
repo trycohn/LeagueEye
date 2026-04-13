@@ -1,4 +1,4 @@
-use rusqlite::{Connection, Result as SqlResult, params};
+use rusqlite::{params, Connection, Result as SqlResult};
 use std::path::PathBuf;
 
 use crate::models::{PlayerProfile, StoredAccount};
@@ -19,7 +19,8 @@ impl Db {
     }
 
     fn migrate(&self) -> SqlResult<()> {
-        self.conn.execute_batch("
+        self.conn.execute_batch(
+            "
             CREATE TABLE IF NOT EXISTS accounts (
                 puuid           TEXT PRIMARY KEY,
                 game_name       TEXT NOT NULL,
@@ -28,7 +29,13 @@ impl Db {
                 summoner_level  INTEGER,
                 last_seen       INTEGER NOT NULL
             );
-        ")?;
+            CREATE TABLE IF NOT EXISTS overlay_positions (
+                overlay_id TEXT PRIMARY KEY,
+                x          INTEGER NOT NULL,
+                y          INTEGER NOT NULL
+            );
+        ",
+        )?;
         Ok(())
     }
 
@@ -48,6 +55,24 @@ impl Db {
             ],
         )?;
         Ok(())
+    }
+
+    pub fn save_overlay_position(&self, overlay_id: &str, x: i32, y: i32) -> SqlResult<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO overlay_positions (overlay_id, x, y) VALUES (?1, ?2, ?3)",
+            params![overlay_id, x, y],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_overlay_position(&self, overlay_id: &str) -> SqlResult<Option<(i32, i32)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT x, y FROM overlay_positions WHERE overlay_id = ?1")?;
+        let mut rows = stmt.query_map(params![overlay_id], |row| {
+            Ok((row.get::<_, i32>(0)?, row.get::<_, i32>(1)?))
+        })?;
+        Ok(rows.next().and_then(|r| r.ok()))
     }
 
     pub fn get_last_account(&self) -> SqlResult<Option<StoredAccount>> {

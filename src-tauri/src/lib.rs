@@ -27,7 +27,7 @@ fn create_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    let _win = WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App("overlay.html".into()))
+    let mut builder = WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App("overlay.html".into()))
         .title("LeagueEye Coach")
         .inner_size(420.0, 200.0)
         .focused(false)
@@ -36,7 +36,14 @@ fn create_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
         .decorations(false)
         .skip_taskbar(true)
         .resizable(false)
-        .visible(true)
+        .visible(true);
+
+    // Restore saved position
+    if let Some(pos) = get_saved_overlay_position(app, "overlay") {
+        builder = builder.position(pos.0 as f64, pos.1 as f64);
+    }
+
+    let _win = builder
         .build()
         .map_err(|e| format!("Failed to create overlay: {}", e))?;
 
@@ -51,7 +58,7 @@ fn create_gold_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    let _win = WebviewWindowBuilder::new(app, "gold-overlay", WebviewUrl::App("gold-overlay.html".into()))
+    let mut builder = WebviewWindowBuilder::new(app, "gold-overlay", WebviewUrl::App("gold-overlay.html".into()))
         .title("LeagueEye Gold")
         .inner_size(280.0, 300.0)
         .focused(false)
@@ -60,7 +67,14 @@ fn create_gold_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
         .decorations(false)
         .skip_taskbar(true)
         .resizable(false)
-        .visible(true)
+        .visible(true);
+
+    // Restore saved position
+    if let Some(pos) = get_saved_overlay_position(app, "gold-overlay") {
+        builder = builder.position(pos.0 as f64, pos.1 as f64);
+    }
+
+    let _win = builder
         .build()
         .map_err(|e| format!("Failed to create gold overlay: {}", e))?;
 
@@ -144,6 +158,23 @@ async fn get_league_window_visibility() -> Result<bool, String> {
 #[tauri::command]
 async fn hide_overlay(app: tauri::AppHandle) -> Result<(), String> {
     hide_overlay_window(&app)
+}
+
+fn get_saved_overlay_position(app: &tauri::AppHandle, overlay_id: &str) -> Option<(i32, i32)> {
+    let db: tauri::State<SharedDb> = app.state();
+    db.lock().ok()?.get_overlay_position(overlay_id).ok().flatten()
+}
+
+#[tauri::command]
+async fn save_overlay_position(
+    app: tauri::AppHandle,
+    label: String,
+    x: i32,
+    y: i32,
+) -> Result<(), String> {
+    let db: tauri::State<SharedDb> = app.state();
+    let db = db.lock().map_err(|e| e.to_string())?;
+    db.save_overlay_position(&label, x, y).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -461,6 +492,7 @@ pub fn run() {
             get_league_window_visibility,
             hide_overlay,
             resize_overlay,
+            save_overlay_position,
             show_gold_overlay,
             hide_gold_overlay,
             resize_gold_overlay,

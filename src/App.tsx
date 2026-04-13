@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emit } from "@tauri-apps/api/event";
 import { SearchBar } from "./components/SearchBar";
 import { ProfileCard } from "./components/ProfileCard";
 import { MasteryList } from "./components/MasteryList";
@@ -60,6 +60,17 @@ export default function App() {
   const overlayShownRef = useRef(false);
   const overlayRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const leaveLiveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevPhaseRef = useRef<string>("none");
+
+  // Сброс истории AI Coach при начале нового матча (none → champ_select)
+  useEffect(() => {
+    const prev = prevPhaseRef.current;
+    prevPhaseRef.current = phase;
+
+    if (prev === "none" && phase === "champ_select") {
+      emit("coach-reset").catch(() => {});
+    }
+  }, [phase]);
 
   useEffect(() => {
     if (isLive) {

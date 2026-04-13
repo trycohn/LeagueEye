@@ -81,11 +81,17 @@ export function GoldOverlayApp() {
     updateSize();
   }, [data, error, loading, updateSize]);
 
-  function handleMouseDown(e: React.MouseEvent) {
+  async function handleMouseDown(e: React.MouseEvent) {
     const target = e.target as HTMLElement;
     if (!e.shiftKey || target.closest("button")) return;
     e.preventDefault();
-    void getCurrentWindow().startDragging();
+    const win = getCurrentWindow();
+    await win.startDragging();
+    // Save position after drag ends
+    try {
+      const pos = await win.outerPosition();
+      await invoke("save_overlay_position", { label: "gold-overlay", x: pos.x, y: pos.y });
+    } catch { /* ignore */ }
   }
 
   function handleClose() {
