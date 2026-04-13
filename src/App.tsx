@@ -39,6 +39,7 @@ export default function App() {
     searchPlayer,
     loadDetectedAccount,
     loadMoreMatches,
+    loadMatchesUpTo,
   } = useRiotApi();
 
   const [view, setView] = useState<View>("home");
@@ -341,8 +342,7 @@ export default function App() {
             <PlayerTrends
               matches={matches}
               totalCached={totalCached}
-              hasMore={hasMore}
-              loadMoreMatches={loadMoreMatches}
+              loadMatchesUpTo={loadMatchesUpTo}
             />
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">

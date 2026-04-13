@@ -200,6 +200,38 @@ export function useRiotApi() {
     }
   }, [currentPuuid, matches.length, loadingMore, totalCached]);
 
+  // Load matches up to a target count in one shot (used by PlayerTrends).
+  // `target` of 0 means load all available (up to totalCached).
+  const loadMatchesUpTo = useCallback(async (target: number) => {
+    if (!currentPuuid) return;
+    const needed = target === 0 ? totalCached : target;
+    const currentLen = matches.length;
+    if (currentLen >= needed) return;
+
+    const remaining = needed - currentLen;
+    setLoadingMore(true);
+    try {
+      const newMatches = await invoke<MatchSummary[]>("load_more_matches", {
+        puuid: currentPuuid,
+        offset: currentLen,
+        limit: remaining,
+      });
+      if (newMatches.length === 0) {
+        setHasMore(false);
+        return;
+      }
+      setMatches((prev: MatchSummary[]) => {
+        const combined = [...prev, ...newMatches];
+        setHasMore(combined.length < totalCached);
+        return combined;
+      });
+    } catch (e) {
+      console.error("loadMatchesUpTo error:", e);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [currentPuuid, matches.length, totalCached]);
+
   return {
     profile,
     mastery,
@@ -215,5 +247,6 @@ export function useRiotApi() {
     searchPlayer,
     loadDetectedAccount,
     loadMoreMatches,
+    loadMatchesUpTo,
   };
 }

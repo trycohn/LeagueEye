@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   LineChart,
   Line,
@@ -27,8 +27,7 @@ import { positionIconUrl, positionName } from "../lib/ddragon";
 interface Props {
   matches: MatchSummary[];
   totalCached: number;
-  hasMore: boolean;
-  loadMoreMatches: () => Promise<void>;
+  loadMatchesUpTo: (target: number) => Promise<void>;
 }
 
 // ─── Tabs ────────────────────────────────────────────────────────────────────
@@ -210,63 +209,31 @@ function WinrateTooltip({
 
 type GameCount = 20 | 50 | 0; // 0 = all
 
-const PAGE_SIZE = 15;
-
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 export function PlayerTrends({
   matches,
   totalCached,
-  hasMore,
-  loadMoreMatches,
+  loadMatchesUpTo,
 }: Props) {
   const [tab, setTab] = useState<Tab>("trends");
   const [gameCount, setGameCount] = useState<GameCount>(20);
   const [loadingExtra, setLoadingExtra] = useState(false);
-  const loadingRef = useRef(false);
-
-  // Load enough matches for the requested game count
-  const ensureMatches = useCallback(
-    async (target: number) => {
-      // target=0 means load ALL
-      if (loadingRef.current) return;
-
-      const needed = target === 0 ? totalCached : target;
-      if (matches.length >= needed || !hasMore) return;
-
-      loadingRef.current = true;
-      setLoadingExtra(true);
-      try {
-        // Keep calling loadMoreMatches until we have enough
-        let safety = 0;
-        const maxIterations = Math.ceil((needed - matches.length) / PAGE_SIZE) + 1;
-        while (safety < maxIterations) {
-          safety++;
-          await loadMoreMatches();
-          // Re-check after each load — we read from the hook's state via closure,
-          // but since loadMoreMatches mutates state, we need to break based on
-          // how many pages we've requested
-          const loadedSoFar = matches.length + safety * PAGE_SIZE;
-          if (loadedSoFar >= needed) break;
-        }
-      } finally {
-        loadingRef.current = false;
-        setLoadingExtra(false);
-      }
-    },
-    [matches.length, totalCached, hasMore, loadMoreMatches]
-  );
 
   const handleGameCount = useCallback(
-    (count: GameCount) => {
+    async (count: GameCount) => {
       setGameCount(count);
-      if (count === 0) {
-        void ensureMatches(0);
-      } else if (matches.length < count && hasMore) {
-        void ensureMatches(count);
+      const needed = count === 0 ? totalCached : count;
+      if (matches.length < needed) {
+        setLoadingExtra(true);
+        try {
+          await loadMatchesUpTo(needed);
+        } finally {
+          setLoadingExtra(false);
+        }
       }
     },
-    [ensureMatches, matches.length, hasMore]
+    [matches.length, totalCached, loadMatchesUpTo]
   );
 
   const slicedMatches = useMemo(() => {
