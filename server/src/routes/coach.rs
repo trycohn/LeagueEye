@@ -11,6 +11,7 @@ use std::time::Instant;
 
 use crate::{AiCoachProvider, AppState};
 use crate::item_catalog::ItemCatalog;
+use crate::champion_catalog::ChampionCatalog;
 
 // ─── System prompt ──────────────────────────────────────────────────────────
 
@@ -83,8 +84,9 @@ impl MatchStage {
     }
 }
 
-fn build_system_prompt(ctx: &CoachingContext, catalog: Option<&ItemCatalog>) -> String {
+fn build_system_prompt(ctx: &CoachingContext, catalog: Option<&ItemCatalog>, champ_catalog: Option<&ChampionCatalog>) -> String {
     let item_catalog_block = build_item_catalog_block(catalog);
+    let champ_catalog_block = build_champion_catalog_block(ctx, champ_catalog);
 
     if ctx.phase == "draft_pick" {
         let pick_order = ctx.draft_pick_order.as_deref().unwrap_or("mid");
@@ -118,6 +120,9 @@ fn build_system_prompt(ctx: &CoachingContext, catalog: Option<&ItemCatalog>) -> 
         if !item_catalog_block.is_empty() {
             prompt.push_str(&item_catalog_block);
         }
+        if !champ_catalog_block.is_empty() {
+            prompt.push_str(&champ_catalog_block);
+        }
         return prompt;
     }
 
@@ -140,6 +145,9 @@ fn build_system_prompt(ctx: &CoachingContext, catalog: Option<&ItemCatalog>) -> 
 - НИКАКОГО текста кроме двух строк с советами"#.to_string();
         if !item_catalog_block.is_empty() {
             prompt.push_str(&item_catalog_block);
+        }
+        if !champ_catalog_block.is_empty() {
+            prompt.push_str(&champ_catalog_block);
         }
         return prompt;
     }
@@ -181,6 +189,10 @@ fn build_system_prompt(ctx: &CoachingContext, catalog: Option<&ItemCatalog>) -> 
         prompt.push_str(&item_catalog_block);
     }
 
+    if !champ_catalog_block.is_empty() {
+        prompt.push_str(&champ_catalog_block);
+    }
+
     prompt
 }
 
@@ -214,9 +226,75 @@ fn build_item_catalog_block(catalog: Option<&ItemCatalog>) -> String {
     block
 }
 
+/// Build the champion catalog block for the system prompt.
+/// Only includes champions that are in the current game (from ctx.my_team + ctx.enemy_team).
+/// Returns empty string if catalog is None or no champions found.
+fn build_champion_catalog_block(ctx: &CoachingContext, catalog: Option<&ChampionCatalog>) -> String {
+    let catalog = match catalog {
+        Some(c) if !c.champions.is_empty() => c,
+        _ => return String::new(),
+    };
+
+    // Collect champion internal names from the game
+    let mut game_champions: Vec<&str> = Vec::new();
+    for p in ctx.my_team.iter().chain(ctx.enemy_team.iter()) {
+        if !p.champion_name.is_empty() && !p.champion_name.starts_with("ChampID:") {
+            game_champions.push(&p.champion_name);
+        }
+    }
+
+    if game_champions.is_empty() {
+        return String::new();
+    }
+
+    // Deduplicate
+    game_champions.sort();
+    game_champions.dedup();
+
+    let mut block = String::from("\n\n=== СПРАВОЧНИК ЧЕМПИОНОВ ===\n");
+
+    let mut found_any = false;
+    for &champ_name in &game_champions {
+        if let Some(champ) = catalog.champions.get(champ_name) {
+            found_any = true;
+            let resource = crate::champion_catalog::format_resource_ru(&champ.resource);
+            let tags = champ.tags.join("/");
+            block.push_str(&format!("\n{} ({}) — {} — {}\n", champ.ru_name, champ.en_name, tags, resource));
+
+            for ability in &champ.abilities {
+                let slot_label = match ability.slot.as_str() {
+                    "Passive" => "Пассивное",
+                    other => other,
+                };
+                if ability.short_desc.is_empty() {
+                    block.push_str(&format!(
+                        "  ({}) {} ({})\n",
+                        slot_label, ability.ru_name, ability.en_name
+                    ));
+                } else {
+                    block.push_str(&format!(
+                        "  ({}) {} ({}) — {}\n",
+                        slot_label, ability.ru_name, ability.en_name, ability.short_desc
+                    ));
+                }
+            }
+        }
+    }
+
+    if !found_any {
+        return String::new();
+    }
+
+    block.push_str("\n- Называй чемпионов по РУССКИМ именам из СПРАВОЧНИКА ЧЕМПИОНОВ\n\
+- Называй способности по РУССКИМ именам из справочника или используй слот (Q), (W), (E), (R), (Пассивное)\n\
+- Учитывай ресурс чемпиона (мана/энергия/без ресурса) при советах");
+
+    block
+}
+
 // ─── Build user message ─────────────────────────────────────────────────────
 
-fn build_user_message(ctx: &CoachingContext, catalog: Option<&ItemCatalog>) -> String {
+fn build_user_message(ctx: &CoachingContext, catalog: Option<&ItemCatalog>, champ_catalog: Option<&ChampionCatalog>) -> String {
     let mut msg = String::new();
 
     if ctx.phase == "draft_pick" {
@@ -235,14 +313,18 @@ fn build_user_message(ctx: &CoachingContext, catalog: Option<&ItemCatalog>) -> S
 
         // Bans
         if !ctx.banned_champions.is_empty() {
-            msg.push_str(&format!("\nЗабаненные чемпионы: {}\n", ctx.banned_champions.join(", ")));
+            let translated_bans: Vec<&str> = ctx.banned_champions.iter()
+                .map(|name| translate_champion_name(name, champ_catalog))
+                .collect();
+            msg.push_str(&format!("\nЗабаненные чемпионы: {}\n", translated_bans.join(", ")));
         }
 
         // My champion pool
         if !ctx.my_champion_pool.is_empty() {
             msg.push_str("\nМой чемпион-пул (на ком я играю):\n");
             for entry in &ctx.my_champion_pool {
-                msg.push_str(&format!("- {} — {} игр, {}% WR\n", entry.champion_name, entry.games, entry.winrate));
+                let champ_display = translate_champion_name(&entry.champion_name, champ_catalog);
+                msg.push_str(&format!("- {} — {} игр, {}% WR\n", champ_display, entry.games, entry.winrate));
             }
         }
 
@@ -253,7 +335,8 @@ fn build_user_message(ctx: &CoachingContext, catalog: Option<&ItemCatalog>) -> S
         if !picked_allies.is_empty() {
             msg.push_str("\nМоя команда (уже выбраны):\n");
             for p in &picked_allies {
-                msg.push_str(&format!("- {} ({})", p.champion_name,
+                let champ_display = translate_champion_name(&p.champion_name, champ_catalog);
+                msg.push_str(&format!("- {} ({})", champ_display,
                     if p.position.is_empty() { "?" } else { &p.position }));
                 if let Some(ref class) = p.champion_class {
                     msg.push_str(&format!(" — {}", class));
@@ -272,7 +355,8 @@ fn build_user_message(ctx: &CoachingContext, catalog: Option<&ItemCatalog>) -> S
         if !picked_enemies.is_empty() {
             msg.push_str("\nВражеская команда (уже выбраны):\n");
             for p in &picked_enemies {
-                msg.push_str(&format!("- {} ({})", p.champion_name,
+                let champ_display = translate_champion_name(&p.champion_name, champ_catalog);
+                msg.push_str(&format!("- {} ({})", champ_display,
                     if p.position.is_empty() { "?" } else { &p.position }));
                 if let Some(ref class) = p.champion_class {
                     msg.push_str(&format!(" — {}", class));
@@ -302,7 +386,8 @@ fn build_user_message(ctx: &CoachingContext, catalog: Option<&ItemCatalog>) -> S
     // Dedicated block for the player being coached
     msg.push_str("\n=== Я (игрок) ===\n");
     if !ctx.my_champion.is_empty() {
-        msg.push_str(&format!("Чемпион: {} ({})\n", ctx.my_champion,
+        let my_champ_display = translate_champion_name(&ctx.my_champion, champ_catalog);
+        msg.push_str(&format!("Чемпион: {} ({})\n", my_champ_display,
             if ctx.my_position.is_empty() { "?" } else { &ctx.my_position }));
     }
 
@@ -371,12 +456,12 @@ fn build_user_message(ctx: &CoachingContext, catalog: Option<&ItemCatalog>) -> S
         let is_me = p.champion_name == ctx.my_champion
             && (ctx.my_position.is_empty() || p.position == ctx.my_position);
         let marker = if is_me { "[Я] " } else { "" };
-        write_player_line(&mut msg, p, marker, ctx.phase == "champ_select", catalog);
+        write_player_line(&mut msg, p, marker, ctx.phase == "champ_select", catalog, champ_catalog);
     }
 
     msg.push_str("\nВражеская команда (ПРОТИВНИКИ):\n");
     for p in &ctx.enemy_team {
-        write_player_line(&mut msg, p, "", ctx.phase == "champ_select", catalog);
+        write_player_line(&mut msg, p, "", ctx.phase == "champ_select", catalog, champ_catalog);
     }
 
     if !ctx.recent_events.is_empty() {
@@ -461,8 +546,17 @@ fn format_resource(resource: &str) -> String {
     }
 }
 
-fn write_player_line(msg: &mut String, p: &CoachPlayerInfo, marker: &str, is_champ_select: bool, catalog: Option<&ItemCatalog>) {
-    msg.push_str(&format!("- {}{} ({}) ", marker, p.champion_name,
+/// Translate champion name: internal_name → RU display name
+fn translate_champion_name<'a>(name: &'a str, catalog: Option<&'a ChampionCatalog>) -> &'a str {
+    match catalog {
+        Some(c) => c.internal_to_ru.get(name).map(|s| s.as_str()).unwrap_or(name),
+        None => name,
+    }
+}
+
+fn write_player_line(msg: &mut String, p: &CoachPlayerInfo, marker: &str, is_champ_select: bool, catalog: Option<&ItemCatalog>, champ_catalog: Option<&ChampionCatalog>) {
+    let champ_name = translate_champion_name(&p.champion_name, champ_catalog);
+    msg.push_str(&format!("- {}{} ({}) ", marker, champ_name,
         if p.position.is_empty() { "?" } else { &p.position }));
 
     // Add resource and class info
@@ -527,8 +621,22 @@ pub async fn stream_coach(
         .await
         .ok();
 
-    let system_prompt = build_system_prompt(&ctx, catalog);
-    let user_message = build_user_message(&ctx, catalog);
+    // Load champion catalog (lazy, cached in OnceCell)
+    let champ_catalog = state
+        .champion_catalog
+        .get_or_try_init(|| async {
+            crate::champion_catalog::load_champion_catalog()
+                .await
+                .map_err(|e| {
+                    log::error!("[coach] Failed to load champion catalog: {}", e);
+                    e
+                })
+        })
+        .await
+        .ok();
+
+    let system_prompt = build_system_prompt(&ctx, catalog, champ_catalog);
+    let user_message = build_user_message(&ctx, catalog, champ_catalog);
 
     log::info!("[coach] === SYSTEM PROMPT ===\n{}\n=========================", system_prompt);
     log::info!("[coach] === USER MESSAGE ===\n{}\n========================", user_message);
@@ -1007,7 +1115,7 @@ mod tests {
 
     #[test]
     fn user_message_includes_match_stage_and_focus() {
-        let message = build_user_message(&sample_context(Some(20 * 60)), None);
+        let message = build_user_message(&sample_context(Some(20 * 60)), None, None);
 
         assert!(message.contains("Фаза: В игре (20:00)"));
         assert!(message.contains("Стадия матча: средняя (mid game)"));
@@ -1016,7 +1124,7 @@ mod tests {
 
     #[test]
     fn user_message_uses_unknown_stage_fallback_when_time_missing() {
-        let message = build_user_message(&sample_context(None), None);
+        let message = build_user_message(&sample_context(None), None, None);
 
         assert!(message.contains("Фаза: В игре (?)"));
         assert!(message.contains("Стадия матча: неизвестна"));
@@ -1027,7 +1135,7 @@ mod tests {
 
     #[test]
     fn system_prompt_uses_stage_specific_focus_and_anti_repeat_rule() {
-        let prompt = build_system_prompt(&sample_context(Some(31 * 60)), None);
+        let prompt = build_system_prompt(&sample_context(Some(31 * 60)), None, None);
 
         assert!(prompt.contains("Стадия матча сейчас: поздняя (late game)"));
         assert!(prompt.contains(
@@ -1040,7 +1148,7 @@ mod tests {
 
     #[test]
     fn system_prompt_uses_neutral_fallback_when_stage_unknown() {
-        let prompt = build_system_prompt(&sample_context(None), None);
+        let prompt = build_system_prompt(&sample_context(None), None, None);
 
         assert!(prompt.contains("Стадия матча сейчас: неизвестная"));
         assert!(prompt.contains(
@@ -1056,7 +1164,7 @@ mod tests {
         let mut ctx = sample_context(Some(20 * 60));
         ctx.phase = "champ_select".to_string();
 
-        let prompt = build_system_prompt(&ctx, None);
+        let prompt = build_system_prompt(&ctx, None, None);
 
         assert!(prompt.contains("Анализируй драфт и давай рекомендации"));
         assert!(!prompt.contains("Стадия матча сейчас:"));
@@ -1110,7 +1218,7 @@ mod tests {
     #[test]
     fn system_prompt_includes_item_catalog_when_present() {
         let catalog = sample_catalog();
-        let prompt = build_system_prompt(&sample_context(Some(20 * 60)), Some(&catalog));
+        let prompt = build_system_prompt(&sample_context(Some(20 * 60)), Some(&catalog), None);
 
         assert!(prompt.contains("=== СПРАВОЧНИК ПРЕДМЕТОВ ==="));
         assert!(prompt.contains("\u{0413}\u{0440}\u{0430}\u{043d}\u{044c} \u{0411}\u{0435}\u{0441}\u{043a}\u{043e}\u{043d}\u{0435}\u{0447}\u{043d}\u{043e}\u{0441}\u{0442}\u{0438} (Infinity Edge) | 3400 | Damage,CriticalStrike"));
@@ -1119,7 +1227,7 @@ mod tests {
 
     #[test]
     fn system_prompt_without_catalog_has_no_item_block() {
-        let prompt = build_system_prompt(&sample_context(Some(20 * 60)), None);
+        let prompt = build_system_prompt(&sample_context(Some(20 * 60)), None, None);
 
         assert!(!prompt.contains("СПРАВОЧНИК ПРЕДМЕТОВ"));
     }
@@ -1130,7 +1238,7 @@ mod tests {
         let mut ctx = sample_context(Some(20 * 60));
         ctx.phase = "champ_select".to_string();
 
-        let prompt = build_system_prompt(&ctx, Some(&catalog));
+        let prompt = build_system_prompt(&ctx, Some(&catalog), None);
 
         assert!(prompt.contains("=== СПРАВОЧНИК ПРЕДМЕТОВ ==="));
         assert!(prompt.contains("Анализируй драфт и давай рекомендации"));
@@ -1139,7 +1247,7 @@ mod tests {
     #[test]
     fn user_message_translates_items_with_catalog() {
         let catalog = sample_catalog();
-        let message = build_user_message(&sample_context(Some(20 * 60)), Some(&catalog));
+        let message = build_user_message(&sample_context(Some(20 * 60)), Some(&catalog), None);
 
         // Player's own items (detailed format with gold + tags)
         assert!(message.contains("\u{041f}\u{043e}\u{0442}\u{0435}\u{0440}\u{044f}\u{043d}\u{043d}\u{0430}\u{044f} \u{0413}\u{043b}\u{0430}\u{0432}\u{0430} (1300g #SpellDamage #Mana)"));
@@ -1155,14 +1263,14 @@ mod tests {
         ctx.my_team[0].items = vec!["Unknown New Item".to_string()];
         ctx.enemy_team[0].items = vec!["Unknown New Item".to_string()];
 
-        let message = build_user_message(&ctx, Some(&catalog));
+        let message = build_user_message(&ctx, Some(&catalog), None);
 
         assert!(message.contains("Unknown New Item"));
     }
 
     #[test]
     fn user_message_without_catalog_uses_en_names() {
-        let message = build_user_message(&sample_context(Some(20 * 60)), None);
+        let message = build_user_message(&sample_context(Some(20 * 60)), None, None);
 
         assert!(message.contains("Lost Chapter"));
         assert!(!message.contains("\u{041f}\u{043e}\u{0442}\u{0435}\u{0440}\u{044f}\u{043d}\u{043d}\u{0430}\u{044f}"));
@@ -1214,7 +1322,7 @@ mod tests {
     #[test]
     fn draft_pick_prompt_recommends_safe_picks_for_early_picker() {
         let ctx = sample_draft_context("early");
-        let prompt = build_system_prompt(&ctx, None);
+        let prompt = build_system_prompt(&ctx, None, None);
 
         assert!(prompt.contains("AI-помощник по драфту"));
         assert!(prompt.contains("БЕЗОПАСНЫЕ (safe)"));
@@ -1225,7 +1333,7 @@ mod tests {
     #[test]
     fn draft_pick_prompt_recommends_counterpicks_for_late_picker() {
         let ctx = sample_draft_context("late");
-        let prompt = build_system_prompt(&ctx, None);
+        let prompt = build_system_prompt(&ctx, None, None);
 
         assert!(prompt.contains("AI-помощник по драфту"));
         assert!(prompt.contains("КОНТРПИКИ"));
@@ -1235,7 +1343,7 @@ mod tests {
     #[test]
     fn draft_pick_user_message_includes_bans_and_picks() {
         let ctx = sample_draft_context("late");
-        let message = build_user_message(&ctx, None);
+        let message = build_user_message(&ctx, None, None);
 
         assert!(message.contains("Фаза: Помощь с пиком"));
         assert!(message.contains("Поздний пик"));
@@ -1249,7 +1357,7 @@ mod tests {
     #[test]
     fn draft_pick_user_message_includes_champion_pool() {
         let ctx = sample_draft_context("early");
-        let message = build_user_message(&ctx, None);
+        let message = build_user_message(&ctx, None, None);
 
         assert!(message.contains("Мой чемпион-пул"));
         assert!(message.contains("Mordekaiser"));
@@ -1261,11 +1369,193 @@ mod tests {
     #[test]
     fn draft_pick_prompt_does_not_include_match_stage() {
         let ctx = sample_draft_context("mid");
-        let prompt = build_system_prompt(&ctx, None);
+        let prompt = build_system_prompt(&ctx, None, None);
 
         assert!(!prompt.contains("Стадия матча сейчас:"));
         assert!(!prompt.contains("early game"));
         assert!(!prompt.contains("mid game"));
         assert!(prompt.contains("середине драфта"));
+    }
+
+    // ── Champion catalog integration tests ──────────────────────────────
+
+    fn sample_champ_catalog() -> ChampionCatalog {
+        use std::collections::HashMap;
+        use crate::champion_catalog::{CatalogChampion, ChampionAbilityInfo};
+
+        let mut champions = HashMap::new();
+        let mut en_to_ru = HashMap::new();
+        let mut internal_to_ru = HashMap::new();
+
+        // Ahri — used in sample_context as my_champion and in my_team
+        let ahri = CatalogChampion {
+            internal_name: "Ahri".to_string(),
+            en_name: "Ahri".to_string(),
+            ru_name: "\u{0410}\u{0440}\u{0438}".to_string(), // Ари
+            resource: "Mana".to_string(),
+            tags: vec!["Mage".to_string(), "Assassin".to_string()],
+            abilities: vec![
+                ChampionAbilityInfo {
+                    slot: "Passive".to_string(),
+                    en_name: "Essence Theft".to_string(),
+                    ru_name: "\u{0411}\u{043b}\u{0430}\u{0433}\u{043e}\u{0434}\u{0430}\u{0442}\u{044c}".to_string(),
+                    short_desc: "\u{0410}\u{0440}\u{0438} \u{043f}\u{043e}\u{043b}\u{0443}\u{0447}\u{0430}\u{0435}\u{0442} \u{0437}\u{0430}\u{0440}\u{044f}\u{0434}\u{044b}".to_string(),
+                },
+                ChampionAbilityInfo {
+                    slot: "Q".to_string(),
+                    en_name: "Orb of Deception".to_string(),
+                    ru_name: "\u{0421}\u{0444}\u{0435}\u{0440}\u{0430} \u{043e}\u{0431}\u{043c}\u{0430}\u{043d}\u{0430}".to_string(),
+                    short_desc: "\u{0410}\u{0440}\u{0438} \u{0431}\u{0440}\u{043e}\u{0441}\u{0430}\u{0435}\u{0442} \u{0441}\u{0444}\u{0435}\u{0440}\u{0443}".to_string(),
+                },
+                ChampionAbilityInfo {
+                    slot: "W".to_string(),
+                    en_name: "Fox-Fire".to_string(),
+                    ru_name: "\u{041b}\u{0438}\u{0441}\u{0438}\u{0439} \u{043e}\u{0433}\u{043e}\u{043d}\u{044c}".to_string(),
+                    short_desc: String::new(),
+                },
+                ChampionAbilityInfo {
+                    slot: "E".to_string(),
+                    en_name: "Charm".to_string(),
+                    ru_name: "\u{041e}\u{0447}\u{0430}\u{0440}\u{043e}\u{0432}\u{0430}\u{043d}\u{0438}\u{0435}".to_string(),
+                    short_desc: String::new(),
+                },
+                ChampionAbilityInfo {
+                    slot: "R".to_string(),
+                    en_name: "Spirit Rush".to_string(),
+                    ru_name: "\u{041f}\u{043e}\u{0440}\u{044b}\u{0432} \u{0434}\u{0443}\u{0445}\u{0430}".to_string(),
+                    short_desc: String::new(),
+                },
+            ],
+            ally_tips: vec![],
+        };
+        en_to_ru.insert("Ahri".to_string(), "\u{0410}\u{0440}\u{0438}".to_string());
+        internal_to_ru.insert("Ahri".to_string(), "\u{0410}\u{0440}\u{0438}".to_string());
+        champions.insert("Ahri".to_string(), ahri);
+
+        // Zed — used in sample_context as enemy
+        let zed = CatalogChampion {
+            internal_name: "Zed".to_string(),
+            en_name: "Zed".to_string(),
+            ru_name: "\u{0417}\u{0435}\u{0434}".to_string(), // Зед
+            resource: "Energy".to_string(),
+            tags: vec!["Assassin".to_string()],
+            abilities: vec![
+                ChampionAbilityInfo {
+                    slot: "Passive".to_string(),
+                    en_name: "Contempt for the Weak".to_string(),
+                    ru_name: "\u{041f}\u{0440}\u{0435}\u{0437}\u{0440}\u{0435}\u{043d}\u{0438}\u{0435} \u{043a} \u{0441}\u{043b}\u{0430}\u{0431}\u{044b}\u{043c}".to_string(),
+                    short_desc: "\u{0417}\u{0435}\u{0434} \u{043d}\u{0430}\u{043d}\u{043e}\u{0441}\u{0438}\u{0442} \u{0434}\u{043e}\u{043f}. \u{0443}\u{0440}\u{043e}\u{043d}".to_string(),
+                },
+                ChampionAbilityInfo {
+                    slot: "Q".to_string(),
+                    en_name: "Razor Shuriken".to_string(),
+                    ru_name: "\u{041e}\u{0441}\u{0442}\u{0440}\u{044b}\u{0439} \u{0441}\u{044e}\u{0440}\u{0438}\u{043a}\u{0435}\u{043d}".to_string(),
+                    short_desc: String::new(),
+                },
+                ChampionAbilityInfo {
+                    slot: "W".to_string(),
+                    en_name: "Living Shadow".to_string(),
+                    ru_name: "\u{0416}\u{0438}\u{0432}\u{0430}\u{044f} \u{0442}\u{0435}\u{043d}\u{044c}".to_string(),
+                    short_desc: String::new(),
+                },
+                ChampionAbilityInfo {
+                    slot: "E".to_string(),
+                    en_name: "Shadow Slash".to_string(),
+                    ru_name: "\u{0422}\u{0435}\u{043d}\u{0435}\u{0432}\u{043e}\u{0439} \u{0443}\u{0434}\u{0430}\u{0440}".to_string(),
+                    short_desc: String::new(),
+                },
+                ChampionAbilityInfo {
+                    slot: "R".to_string(),
+                    en_name: "Death Mark".to_string(),
+                    ru_name: "\u{041c}\u{0435}\u{0442}\u{043a}\u{0430} \u{0441}\u{043c}\u{0435}\u{0440}\u{0442}\u{0438}".to_string(),
+                    short_desc: String::new(),
+                },
+            ],
+            ally_tips: vec![],
+        };
+        en_to_ru.insert("Zed".to_string(), "\u{0417}\u{0435}\u{0434}".to_string());
+        internal_to_ru.insert("Zed".to_string(), "\u{0417}\u{0435}\u{0434}".to_string());
+        champions.insert("Zed".to_string(), zed);
+
+        ChampionCatalog {
+            champions,
+            en_to_ru,
+            internal_to_ru,
+        }
+    }
+
+    #[test]
+    fn system_prompt_includes_champion_catalog_for_game_champions() {
+        let champ_catalog = sample_champ_catalog();
+        let prompt = build_system_prompt(&sample_context(Some(20 * 60)), None, Some(&champ_catalog));
+
+        assert!(prompt.contains("=== \u{0421}\u{041f}\u{0420}\u{0410}\u{0412}\u{041e}\u{0427}\u{041d}\u{0418}\u{041a} \u{0427}\u{0415}\u{041c}\u{041f}\u{0418}\u{041e}\u{041d}\u{041e}\u{0412} ==="));
+        // Ahri entry
+        assert!(prompt.contains("\u{0410}\u{0440}\u{0438} (Ahri)"));
+        assert!(prompt.contains("Mage/Assassin"));
+        assert!(prompt.contains("\u{0421}\u{0444}\u{0435}\u{0440}\u{0430} \u{043e}\u{0431}\u{043c}\u{0430}\u{043d}\u{0430} (Orb of Deception)"));
+        // Zed entry
+        assert!(prompt.contains("\u{0417}\u{0435}\u{0434} (Zed)"));
+        assert!(prompt.contains("Assassin"));
+        assert!(prompt.contains("\u{041c}\u{0435}\u{0442}\u{043a}\u{0430} \u{0441}\u{043c}\u{0435}\u{0440}\u{0442}\u{0438} (Death Mark)"));
+        // Rules
+        assert!(prompt.contains("РУССКИМ именам"));
+        assert!(prompt.contains("СПРАВОЧНИКА ЧЕМПИОНОВ"));
+    }
+
+    #[test]
+    fn system_prompt_without_champ_catalog_has_no_champion_block() {
+        let prompt = build_system_prompt(&sample_context(Some(20 * 60)), None, None);
+
+        assert!(!prompt.contains("\u{0421}\u{041f}\u{0420}\u{0410}\u{0412}\u{041e}\u{0427}\u{041d}\u{0418}\u{041a} \u{0427}\u{0415}\u{041c}\u{041f}\u{0418}\u{041e}\u{041d}\u{041e}\u{0412}"));
+    }
+
+    #[test]
+    fn user_message_translates_champion_names_with_catalog() {
+        let champ_catalog = sample_champ_catalog();
+        let message = build_user_message(&sample_context(Some(20 * 60)), None, Some(&champ_catalog));
+
+        // My champion block should use RU name
+        assert!(message.contains("\u{0427}\u{0435}\u{043c}\u{043f}\u{0438}\u{043e}\u{043d}: \u{0410}\u{0440}\u{0438}"));
+        // Enemy team should use RU name
+        assert!(message.contains("\u{0417}\u{0435}\u{0434}"));
+    }
+
+    #[test]
+    fn user_message_without_champ_catalog_uses_internal_names() {
+        let message = build_user_message(&sample_context(Some(20 * 60)), None, None);
+
+        assert!(message.contains("Чемпион: Ahri"));
+        assert!(message.contains("Zed"));
+    }
+
+    #[test]
+    fn champion_catalog_included_in_champ_select_prompt() {
+        let champ_catalog = sample_champ_catalog();
+        let mut ctx = sample_context(Some(20 * 60));
+        ctx.phase = "champ_select".to_string();
+
+        let prompt = build_system_prompt(&ctx, None, Some(&champ_catalog));
+
+        assert!(prompt.contains("=== \u{0421}\u{041f}\u{0420}\u{0410}\u{0412}\u{041e}\u{0427}\u{041d}\u{0418}\u{041a} \u{0427}\u{0415}\u{041c}\u{041f}\u{0418}\u{041e}\u{041d}\u{041e}\u{0412} ==="));
+        assert!(prompt.contains("\u{0410}\u{043d}\u{0430}\u{043b}\u{0438}\u{0437}\u{0438}\u{0440}\u{0443}\u{0439} \u{0434}\u{0440}\u{0430}\u{0444}\u{0442}"));
+    }
+
+    #[test]
+    fn translate_champion_name_returns_ru_when_available() {
+        let catalog = sample_champ_catalog();
+        assert_eq!(translate_champion_name("Ahri", Some(&catalog)), "\u{0410}\u{0440}\u{0438}");
+        assert_eq!(translate_champion_name("Zed", Some(&catalog)), "\u{0417}\u{0435}\u{0434}");
+    }
+
+    #[test]
+    fn translate_champion_name_falls_back_to_internal() {
+        let catalog = sample_champ_catalog();
+        assert_eq!(translate_champion_name("UnknownChamp", Some(&catalog)), "UnknownChamp");
+    }
+
+    #[test]
+    fn translate_champion_name_without_catalog_returns_original() {
+        assert_eq!(translate_champion_name("Ahri", None), "Ahri");
     }
 }

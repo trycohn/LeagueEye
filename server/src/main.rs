@@ -26,6 +26,7 @@ mod riot_api;
 mod db;
 mod routes;
 pub mod item_catalog;
+pub mod champion_catalog;
 
 #[derive(Debug, Clone)]
 pub struct AiCoachConfig {
@@ -51,6 +52,7 @@ pub struct AppState {
     pub db: db::Db,
     pub ai_coach_config: Option<AiCoachConfig>,
     pub item_catalog: tokio::sync::OnceCell<item_catalog::ItemCatalog>,
+    pub champion_catalog: tokio::sync::OnceCell<champion_catalog::ChampionCatalog>,
     /// Cache: puuid → rank (TTL 5 min). Avoids re-fetching ranks every poll.
     pub rank_cache: tokio::sync::Mutex<HashMap<String, CachedRank>>,
     /// Cache: "gameName#tagLine" → puuid (TTL 10 min).
@@ -98,6 +100,7 @@ async fn main() {
         db: db::Db::new(pool),
         ai_coach_config,
         item_catalog: tokio::sync::OnceCell::new(),
+        champion_catalog: tokio::sync::OnceCell::new(),
         rank_cache: tokio::sync::Mutex::new(HashMap::new()),
         puuid_cache: tokio::sync::Mutex::new(HashMap::new()),
     });

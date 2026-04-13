@@ -80,13 +80,15 @@ React UI ──invoke()──► Tauri commands ──HTTP──► Axum server 
 
 ### Server (server/src/)
 
-- **main.rs** — Axum router, PostgreSQL pool (sqlx), auto-runs migrations, `AppState` with `RiotApiClient`, `Db`, optional `AiCoachConfig` (Anthropic / OpenRouter / DeepSeek, plus optional OpenRouter attribution headers)
+- **main.rs** — Axum router, PostgreSQL pool (sqlx), auto-runs migrations, `AppState` with `RiotApiClient`, `Db`, optional `AiCoachConfig`, `ItemCatalog`, `ChampionCatalog` (Anthropic / OpenRouter / DeepSeek, plus optional OpenRouter attribution headers)
 - **riot_api.rs** — Riot API HTTP client with 2-level rate limiter (18 req/s + 95 req/2min), 429 retry logic
 - **db.rs** — PostgreSQL queries (sqlx). Tables: accounts, matches, match_participants, rank_snapshots, champion_mastery. Includes dashboard aggregate queries (best players by role, top winrate champions)
+- **item_catalog.rs** — DDragon item.json loader (en_US + ru_RU). Builds catalog of final items with Russian names, gold costs, tags. Cached in `AppState` via `OnceCell`
+- **champion_catalog.rs** — DDragon champion.json + per-champion detail loader (en_US + ru_RU). Builds catalog of all ~170 champions with Russian names, abilities (passive + Q/W/E/R), resource type, class tags. Cached in `AppState` via `OnceCell`
 - **routes/players.rs** — GET `/api/players/{game_name}/{tag_line}`, `/api/players/{puuid}/mastery`, `/api/players/{puuid}/matches`. Smart caching: serves cached data immediately, fetches fresh matches in background
 - **routes/matches.rs** — GET `/api/matches/{match_id}` — cache-first, falls back to Riot API
 - **routes/live.rs** — POST `/api/live/enrich` (client sends LCU data, server adds ranks via Spectator API + league entries, and hydrates missing Riot IDs / puuids when possible)
-- **routes/coach.rs** — POST `/api/coach/stream` (receives `CoachingContext`, returns SSE stream from Anthropic / OpenRouter / DeepSeek). Russian-language system prompts with champion-specific guidance
+- **routes/coach.rs** — POST `/api/coach/stream` (receives `CoachingContext`, returns SSE stream from Anthropic / OpenRouter / DeepSeek). Russian-language system prompts with item catalog and champion catalog (abilities, names) for all 10 game participants
 - **routes/global.rs** — GET `/api/global/dashboard` — aggregate stats from PostgreSQL
 
 ### Client (src-tauri/src/)
