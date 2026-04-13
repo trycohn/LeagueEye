@@ -340,7 +340,9 @@ export default function App() {
 
             <PlayerTrends
               matches={matches}
-              puuid={profile.puuid}
+              totalCached={totalCached}
+              hasMore={hasMore}
+              loadMoreMatches={loadMoreMatches}
             />
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">

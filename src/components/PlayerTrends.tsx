@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   LineChart,
   Line,
+  AreaChart,
+  Area,
   XAxis,
   YAxis,
   Tooltip,
@@ -15,37 +16,29 @@ import {
   TrendingDown,
   Minus,
   Loader2,
-  Swords,
   BarChart3,
-  Target,
   Shield,
 } from "lucide-react";
-import type { MatchSummary, MatchupStat } from "../lib/types";
-import {
-  championIconUrl,
-  positionIconUrl,
-  positionName,
-} from "../lib/ddragon";
+import type { MatchSummary } from "../lib/types";
+import { positionIconUrl, positionName } from "../lib/ddragon";
 
 // ─── Props ───────────────────────────────────────────────────────────────────
 
 interface Props {
   matches: MatchSummary[];
-  puuid: string;
+  totalCached: number;
+  hasMore: boolean;
+  loadMoreMatches: () => Promise<void>;
 }
 
 // ─── Tabs ────────────────────────────────────────────────────────────────────
 
-type Tab = "trends" | "matchups" | "roles";
+type Tab = "trends" | "roles";
 
 const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: "trends", label: "Тренды", icon: <BarChart3 size={14} /> },
-  { key: "matchups", label: "Матчапы", icon: <Swords size={14} /> },
   { key: "roles", label: "Роли", icon: <Shield size={14} /> },
 ];
-
-const GAME_COUNTS = [20, 50, 0] as const; // 0 = all
-type GameCount = (typeof GAME_COUNTS)[number];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -53,32 +46,43 @@ function computeKda(k: number, d: number, a: number): number {
   return d === 0 ? k + a : (k + a) / d;
 }
 
-function computeCsPerMin(cs: number, duration: number): number {
-  const mins = duration / 60;
-  return mins > 0 ? cs / mins : 0;
-}
-
 interface TrendPoint {
   index: number;
   label: string;
   kda: number;
-  csPerMin: number;
-  visionScore: number;
   win: boolean;
 }
 
 function buildTrendData(matches: MatchSummary[]): TrendPoint[] {
-  // matches arrive newest-first; reverse so chart reads left=oldest, right=newest
   const chronological = [...matches].reverse();
   return chronological.map((m, i) => ({
     index: i + 1,
     label: `#${i + 1}`,
     kda: Math.round(computeKda(m.kills, m.deaths, m.assists) * 100) / 100,
-    csPerMin:
-      Math.round(computeCsPerMin(m.cs, m.gameDuration) * 10) / 10,
-    visionScore: m.visionScore,
     win: m.win,
   }));
+}
+
+interface WinratePoint {
+  index: number;
+  label: string;
+  winrate: number;
+  win: boolean;
+}
+
+function buildWinrateData(matches: MatchSummary[]): WinratePoint[] {
+  const chronological = [...matches].reverse();
+  let wins = 0;
+  return chronological.map((m, i) => {
+    if (m.win) wins++;
+    const total = i + 1;
+    return {
+      index: total,
+      label: `#${total}`,
+      winrate: Math.round((wins / total) * 1000) / 10,
+      win: m.win,
+    };
+  });
 }
 
 interface RoleStat {
@@ -109,14 +113,8 @@ function buildRoleStats(matches: MatchSummary[]): RoleStat[] {
     const pos = m.position.toUpperCase();
     if (!pos || pos === "UNKNOWN") continue;
     const stat = map.get(pos) || {
-      games: 0,
-      wins: 0,
-      kills: 0,
-      deaths: 0,
-      assists: 0,
-      cs: 0,
-      duration: 0,
-      vision: 0,
+      games: 0, wins: 0, kills: 0, deaths: 0, assists: 0,
+      cs: 0, duration: 0, vision: 0,
     };
     stat.games++;
     if (m.win) stat.wins++;
@@ -135,15 +133,14 @@ function buildRoleStats(matches: MatchSummary[]): RoleStat[] {
     .map((role) => {
       const s = map.get(role)!;
       const g = s.games;
+      const mins = s.duration / 60;
       return {
         role,
         games: g,
         wins: s.wins,
         winrate: Math.round((s.wins / g) * 1000) / 10,
-        avgKda:
-          Math.round(computeKda(s.kills / g, s.deaths / g, s.assists / g) * 100) / 100,
-        avgCsPerMin:
-          Math.round(computeCsPerMin(s.cs, s.duration) * 10) / 10,
+        avgKda: Math.round(computeKda(s.kills / g, s.deaths / g, s.assists / g) * 100) / 100,
+        avgCsPerMin: mins > 0 ? Math.round((s.cs / mins) * 10) / 10 : 0,
         avgVisionScore: Math.round((s.vision / g) * 10) / 10,
       };
     });
@@ -157,31 +154,23 @@ function trendIndicator(data: number[]): "up" | "down" | "flat" {
   const avg1 = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length;
   const avg2 = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length;
   const diff = avg2 - avg1;
-  const threshold = avg1 * 0.05; // 5% change threshold
+  const threshold = avg1 * 0.05;
   if (diff > threshold) return "up";
   if (diff < -threshold) return "down";
   return "flat";
 }
 
-// ─── Custom tooltip ──────────────────────────────────────────────────────────
+// ─── Custom tooltips ─────────────────────────────────────────────────────────
 
-function ChartTooltip({
+function KdaTooltip({
   active,
   payload,
-  metric,
 }: {
   active?: boolean;
   payload?: Array<{ payload: TrendPoint }>;
-  metric: string;
 }) {
   if (!active || !payload?.[0]) return null;
   const d = payload[0].payload;
-  const value =
-    metric === "kda"
-      ? d.kda.toFixed(2)
-      : metric === "csPerMin"
-        ? d.csPerMin.toFixed(1)
-        : d.visionScore;
   return (
     <div className="bg-bg-card border border-border rounded-lg px-3 py-2 text-xs shadow-lg">
       <div className="text-text-muted mb-1">
@@ -190,67 +179,126 @@ function ChartTooltip({
           {d.win ? "W" : "L"}
         </span>
       </div>
-      <div className="text-text-primary font-medium">
-        {metric === "kda" ? "KDA" : metric === "csPerMin" ? "CS/min" : "Vision"}: {value}
-      </div>
+      <div className="text-text-primary font-medium">KDA: {d.kda.toFixed(2)}</div>
     </div>
   );
 }
 
+function WinrateTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload: WinratePoint }>;
+}) {
+  if (!active || !payload?.[0]) return null;
+  const d = payload[0].payload;
+  return (
+    <div className="bg-bg-card border border-border rounded-lg px-3 py-2 text-xs shadow-lg">
+      <div className="text-text-muted mb-1">
+        Игра {d.label}{" "}
+        <span className={d.win ? "text-win" : "text-loss"}>
+          {d.win ? "W" : "L"}
+        </span>
+      </div>
+      <div className="text-text-primary font-medium">Winrate: {d.winrate}%</div>
+    </div>
+  );
+}
+
+// ─── Game count options ──────────────────────────────────────────────────────
+
+type GameCount = 20 | 50 | 0; // 0 = all
+
+const PAGE_SIZE = 15;
+
 // ─── Main Component ──────────────────────────────────────────────────────────
 
-export function PlayerTrends({ matches, puuid }: Props) {
+export function PlayerTrends({
+  matches,
+  totalCached,
+  hasMore,
+  loadMoreMatches,
+}: Props) {
   const [tab, setTab] = useState<Tab>("trends");
   const [gameCount, setGameCount] = useState<GameCount>(20);
-  const [matchups, setMatchups] = useState<MatchupStat[]>([]);
-  const [matchupsLoading, setMatchupsLoading] = useState(false);
-  const [matchupsLoaded, setMatchupsLoaded] = useState(false);
+  const [loadingExtra, setLoadingExtra] = useState(false);
+  const loadingRef = useRef(false);
 
-  // Load matchups when tab switches
-  useEffect(() => {
-    if (tab !== "matchups" || matchupsLoaded || matchupsLoading) return;
-    setMatchupsLoading(true);
-    invoke<MatchupStat[]>("get_matchups", { puuid })
-      .then((data) => {
-        setMatchups(data);
-        setMatchupsLoaded(true);
-      })
-      .catch(() => setMatchups([]))
-      .finally(() => setMatchupsLoading(false));
-  }, [tab, puuid, matchupsLoaded, matchupsLoading]);
+  // Load enough matches for the requested game count
+  const ensureMatches = useCallback(
+    async (target: number) => {
+      // target=0 means load ALL
+      if (loadingRef.current) return;
 
-  // Reset matchups when puuid changes
-  useEffect(() => {
-    setMatchups([]);
-    setMatchupsLoaded(false);
-  }, [puuid]);
+      const needed = target === 0 ? totalCached : target;
+      if (matches.length >= needed || !hasMore) return;
+
+      loadingRef.current = true;
+      setLoadingExtra(true);
+      try {
+        // Keep calling loadMoreMatches until we have enough
+        let safety = 0;
+        const maxIterations = Math.ceil((needed - matches.length) / PAGE_SIZE) + 1;
+        while (safety < maxIterations) {
+          safety++;
+          await loadMoreMatches();
+          // Re-check after each load — we read from the hook's state via closure,
+          // but since loadMoreMatches mutates state, we need to break based on
+          // how many pages we've requested
+          const loadedSoFar = matches.length + safety * PAGE_SIZE;
+          if (loadedSoFar >= needed) break;
+        }
+      } finally {
+        loadingRef.current = false;
+        setLoadingExtra(false);
+      }
+    },
+    [matches.length, totalCached, hasMore, loadMoreMatches]
+  );
+
+  const handleGameCount = useCallback(
+    (count: GameCount) => {
+      setGameCount(count);
+      if (count === 0) {
+        void ensureMatches(0);
+      } else if (matches.length < count && hasMore) {
+        void ensureMatches(count);
+      }
+    },
+    [ensureMatches, matches.length, hasMore]
+  );
 
   const slicedMatches = useMemo(() => {
     if (gameCount === 0) return matches;
     return matches.slice(0, gameCount);
   }, [matches, gameCount]);
 
-  const trendData = useMemo(
-    () => buildTrendData(slicedMatches),
-    [slicedMatches]
-  );
-
+  const trendData = useMemo(() => buildTrendData(slicedMatches), [slicedMatches]);
+  const winrateData = useMemo(() => buildWinrateData(slicedMatches), [slicedMatches]);
   const roleStats = useMemo(() => buildRoleStats(matches), [matches]);
 
   const kdaTrend = useMemo(
     () => trendIndicator(trendData.map((d) => d.kda)),
     [trendData]
   );
-  const csTrend = useMemo(
-    () => trendIndicator(trendData.map((d) => d.csPerMin)),
-    [trendData]
-  );
-  const visionTrend = useMemo(
-    () => trendIndicator(trendData.map((d) => d.visionScore)),
-    [trendData]
+  const wrTrend = useMemo(
+    () => trendIndicator(winrateData.map((d) => d.winrate)),
+    [winrateData]
   );
 
   if (matches.length < 3) return null;
+
+  // Build visible game count options, hide 50 if totalCached < 50
+  const gameCountOptions: { value: GameCount; label: string }[] = [
+    { value: 20, label: "20 игр" },
+  ];
+  if (totalCached >= 50) {
+    gameCountOptions.push({ value: 50, label: "50 игр" });
+  }
+  if (totalCached > 20) {
+    gameCountOptions.push({ value: 0, label: `Все (${totalCached})` });
+  }
 
   return (
     <div className="rounded-xl bg-bg-card border border-border p-4">
@@ -281,63 +329,34 @@ export function PlayerTrends({ matches, puuid }: Props) {
       {tab === "trends" && (
         <div className="space-y-4">
           {/* Game count toggle */}
-          <div className="flex gap-1">
-            {GAME_COUNTS.map((c) => (
+          <div className="flex items-center gap-1">
+            {gameCountOptions.map((opt) => (
               <button
-                key={c}
-                onClick={() => setGameCount(c)}
+                key={opt.value}
+                onClick={() => handleGameCount(opt.value)}
                 className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                  gameCount === c
+                  gameCount === opt.value
                     ? "bg-accent/20 text-accent"
                     : "bg-bg-secondary text-text-muted hover:text-text-primary"
                 }`}
               >
-                {c === 0 ? `Все (${matches.length})` : `${c} игр`}
+                {opt.label}
               </button>
             ))}
+            {loadingExtra && (
+              <div className="flex items-center gap-1.5 text-text-muted text-xs ml-2">
+                <Loader2 size={12} className="animate-spin" />
+                Загрузка...
+              </div>
+            )}
           </div>
 
           {/* KDA Chart */}
-          <TrendChart
-            title="KDA"
-            data={trendData}
-            dataKey="kda"
-            color="#3b82f6"
-            trend={kdaTrend}
-            format={(v) => v.toFixed(2)}
-            metric="kda"
-          />
+          <KdaChart data={trendData} trend={kdaTrend} />
 
-          {/* CS/min Chart */}
-          <TrendChart
-            title="CS/min"
-            data={trendData}
-            dataKey="csPerMin"
-            color="#eab308"
-            trend={csTrend}
-            format={(v) => v.toFixed(1)}
-            metric="csPerMin"
-          />
-
-          {/* Vision Score Chart */}
-          <TrendChart
-            title="Vision Score"
-            data={trendData}
-            dataKey="visionScore"
-            color="#22c55e"
-            trend={visionTrend}
-            format={(v) => Math.round(v).toString()}
-            metric="visionScore"
-          />
+          {/* Winrate Chart */}
+          <WinrateChart data={winrateData} trend={wrTrend} />
         </div>
-      )}
-
-      {/* Matchups Tab */}
-      {tab === "matchups" && (
-        <MatchupsView
-          matchups={matchups}
-          loading={matchupsLoading}
-        />
       )}
 
       {/* Roles Tab */}
@@ -346,41 +365,35 @@ export function PlayerTrends({ matches, puuid }: Props) {
   );
 }
 
-// ─── TrendChart ──────────────────────────────────────────────────────────────
+// ─── KDA Chart ───────────────────────────────────────────────────────────────
 
-function TrendChart({
-  title,
+function KdaChart({
   data,
-  dataKey,
-  color,
   trend,
-  format,
-  metric,
 }: {
-  title: string;
   data: TrendPoint[];
-  dataKey: keyof TrendPoint;
-  color: string;
   trend: "up" | "down" | "flat";
-  format: (v: number) => string;
-  metric: string;
 }) {
-  const values = data.map((d) => d[dataKey] as number);
-  const avg = values.length
-    ? values.reduce((a, b) => a + b, 0) / values.length
-    : 0;
+  const values = data.map((d) => d.kda);
+  const avg = values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0;
   const current = values.length ? values[values.length - 1] : 0;
 
   return (
     <div className="bg-bg-secondary rounded-lg p-3">
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold text-text-primary">{title}</span>
+          <span className="text-xs font-semibold text-text-primary">KDA</span>
           <TrendBadge trend={trend} />
         </div>
         <div className="flex items-center gap-3 text-xs text-text-muted">
-          <span>Текущее: <span className="text-text-primary font-medium">{format(current)}</span></span>
-          <span>Среднее: <span className="text-text-primary font-medium">{format(avg)}</span></span>
+          <span>
+            Текущее:{" "}
+            <span className="text-text-primary font-medium">{current.toFixed(2)}</span>
+          </span>
+          <span>
+            Среднее:{" "}
+            <span className="text-text-primary font-medium">{avg.toFixed(2)}</span>
+          </span>
         </div>
       </div>
       <div className="h-32">
@@ -399,17 +412,17 @@ function TrendChart({
               tickLine={false}
               axisLine={false}
               width={35}
-              tickFormatter={(v) => format(v)}
+              tickFormatter={(v) => v.toFixed(1)}
             />
-            <Tooltip content={<ChartTooltip metric={metric} />} />
+            <Tooltip content={<KdaTooltip />} />
             <ReferenceLine y={avg} stroke="#64748b" strokeDasharray="3 3" />
             <Line
               type="monotone"
-              dataKey={dataKey}
-              stroke={color}
+              dataKey="kda"
+              stroke="#3b82f6"
               strokeWidth={2}
               dot={false}
-              activeDot={{ r: 4, fill: color }}
+              activeDot={{ r: 4, fill: "#3b82f6" }}
             />
           </LineChart>
         </ResponsiveContainer>
@@ -417,6 +430,89 @@ function TrendChart({
     </div>
   );
 }
+
+// ─── Winrate Chart ───────────────────────────────────────────────────────────
+
+function WinrateChart({
+  data,
+  trend,
+}: {
+  data: WinratePoint[];
+  trend: "up" | "down" | "flat";
+}) {
+  const current = data.length ? data[data.length - 1].winrate : 0;
+  const totalWins = data.filter((d) => d.win).length;
+  const totalLosses = data.length - totalWins;
+
+  return (
+    <div className="bg-bg-secondary rounded-lg p-3">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold text-text-primary">Winrate</span>
+          <TrendBadge trend={trend} />
+        </div>
+        <div className="flex items-center gap-3 text-xs text-text-muted">
+          <span>
+            Текущий:{" "}
+            <span
+              className={`font-medium ${
+                current >= 50 ? "text-win" : "text-loss"
+              }`}
+            >
+              {current}%
+            </span>
+          </span>
+          <span>
+            <span className="text-win">{totalWins}W</span>
+            {" / "}
+            <span className="text-loss">{totalLosses}L</span>
+          </span>
+        </div>
+      </div>
+      <div className="h-32">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={data}>
+            <defs>
+              <linearGradient id="winrateGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3} />
+                <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="#2a2d3a" />
+            <XAxis
+              dataKey="index"
+              tick={{ fontSize: 10, fill: "#64748b" }}
+              tickLine={false}
+              axisLine={{ stroke: "#2a2d3a" }}
+              interval={Math.max(0, Math.floor(data.length / 8) - 1)}
+            />
+            <YAxis
+              tick={{ fontSize: 10, fill: "#64748b" }}
+              tickLine={false}
+              axisLine={false}
+              width={35}
+              domain={[0, 100]}
+              tickFormatter={(v) => `${v}%`}
+            />
+            <Tooltip content={<WinrateTooltip />} />
+            <ReferenceLine y={50} stroke="#ef4444" strokeDasharray="3 3" strokeOpacity={0.5} />
+            <Area
+              type="monotone"
+              dataKey="winrate"
+              stroke="#22c55e"
+              strokeWidth={2}
+              fill="url(#winrateGrad)"
+              dot={false}
+              activeDot={{ r: 4, fill: "#22c55e" }}
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+// ─── TrendBadge ──────────────────────────────────────────────────────────────
 
 function TrendBadge({ trend }: { trend: "up" | "down" | "flat" }) {
   if (trend === "up")
@@ -435,159 +531,6 @@ function TrendBadge({ trend }: { trend: "up" | "down" | "flat" }) {
     <span className="flex items-center gap-0.5 text-text-muted text-xs">
       <Minus size={12} />
     </span>
-  );
-}
-
-// ─── MatchupsView ────────────────────────────────────────────────────────────
-
-function MatchupsView({
-  matchups,
-  loading,
-}: {
-  matchups: MatchupStat[];
-  loading: boolean;
-}) {
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-8 gap-2 text-text-muted">
-        <Loader2 size={16} className="animate-spin" />
-        <span className="text-sm">Загрузка матчапов...</span>
-      </div>
-    );
-  }
-
-  if (matchups.length === 0) {
-    return (
-      <div className="text-center py-8 text-text-muted text-sm">
-        Нет данных о матчапах. Нужно минимум 2 игры против одного чемпиона на той же позиции.
-      </div>
-    );
-  }
-
-  // Split into best (wr >= 50, sorted by wr desc) and worst (wr < 50, sorted by wr asc)
-  const best = matchups
-    .filter((m) => m.winrate >= 50)
-    .sort((a, b) => b.winrate - a.winrate || b.games - a.games)
-    .slice(0, 10);
-
-  const worst = matchups
-    .filter((m) => m.winrate < 50)
-    .sort((a, b) => a.winrate - b.winrate || b.games - a.games)
-    .slice(0, 10);
-
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      <MatchupTable
-        title="Лучшие матчапы"
-        icon={<Target size={14} className="text-win" />}
-        matchups={best}
-        emptyText="Нет выигрышных матчапов"
-      />
-      <MatchupTable
-        title="Худшие матчапы"
-        icon={<Swords size={14} className="text-loss" />}
-        matchups={worst}
-        emptyText="Нет проигрышных матчапов"
-      />
-    </div>
-  );
-}
-
-function MatchupTable({
-  title,
-  icon,
-  matchups,
-  emptyText,
-}: {
-  title: string;
-  icon: React.ReactNode;
-  matchups: MatchupStat[];
-  emptyText: string;
-}) {
-  return (
-    <div className="bg-bg-secondary rounded-lg p-3">
-      <div className="flex items-center gap-2 mb-2">
-        {icon}
-        <span className="text-xs font-semibold text-text-primary">{title}</span>
-      </div>
-      {matchups.length === 0 ? (
-        <div className="text-center py-4 text-text-muted text-xs">{emptyText}</div>
-      ) : (
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="text-text-muted uppercase">
-              <th className="text-left py-1 px-1">Противник</th>
-              <th className="text-center py-1 px-1">Поз.</th>
-              <th className="text-center py-1 px-1">Игр</th>
-              <th className="text-center py-1 px-1">WR</th>
-              <th className="text-center py-1 px-1">KDA</th>
-            </tr>
-          </thead>
-          <tbody>
-            {matchups.map((m) => {
-              const kda = computeKda(m.avgKills, m.avgDeaths, m.avgAssists);
-              return (
-                <tr
-                  key={`${m.enemyChampionName}-${m.position}`}
-                  className="border-t border-border/50 hover:bg-bg-hover transition-colors"
-                >
-                  <td className="py-1.5 px-1">
-                    <div className="flex items-center gap-1.5">
-                      <img
-                        src={championIconUrl(m.enemyChampionName)}
-                        alt={m.enemyChampionName}
-                        className="w-6 h-6 rounded"
-                      />
-                      <span className="text-text-primary font-medium">
-                        {m.enemyChampionName}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="text-center py-1.5 px-1">
-                    <img
-                      src={positionIconUrl(m.position)}
-                      alt={m.position}
-                      className="w-3.5 h-3.5 mx-auto opacity-50"
-                    />
-                  </td>
-                  <td className="text-center py-1.5 px-1 text-text-secondary">
-                    {m.games}
-                  </td>
-                  <td className="text-center py-1.5 px-1">
-                    <span
-                      className={`font-semibold ${
-                        m.winrate >= 60
-                          ? "text-win"
-                          : m.winrate >= 50
-                            ? "text-text-primary"
-                            : "text-loss"
-                      }`}
-                    >
-                      {m.winrate}%
-                    </span>
-                  </td>
-                  <td className="text-center py-1.5 px-1">
-                    <span
-                      className={`font-medium ${
-                        kda >= 4
-                          ? "text-gold"
-                          : kda >= 3
-                            ? "text-win"
-                            : kda >= 2
-                              ? "text-text-primary"
-                              : "text-loss"
-                      }`}
-                    >
-                      {kda.toFixed(1)}
-                    </span>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      )}
-    </div>
   );
 }
 
