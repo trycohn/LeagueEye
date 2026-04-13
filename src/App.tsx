@@ -338,6 +338,11 @@ export default function App() {
 
             <MasteryList mastery={mastery} />
 
+            <PlayerTrends
+              matches={matches}
+              puuid={profile.puuid}
+            />
+
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
               <div className="lg:col-span-2">
                 <MatchHistory
@@ -355,11 +360,6 @@ export default function App() {
                 <ChampionStats stats={championStats} />
               </div>
             </div>
-
-            <PlayerTrends
-              matches={matches}
-              puuid={profile.puuid}
-            />
           </div>
         )}
       </main>
