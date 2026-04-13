@@ -151,6 +151,16 @@ pub async fn get_cached_profile(
     }
 }
 
+// ─── get_matchups ─────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_matchups(
+    api: State<'_, ServerApiClient>,
+    puuid: String,
+) -> Result<Vec<MatchupStat>, String> {
+    api.get_matchups(&puuid).await
+}
+
 // ─── get_mastery ──────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -240,7 +250,7 @@ pub async fn get_live_game(
     let creds_elapsed = t0.elapsed();
 
     let t1 = std::time::Instant::now();
-    let gameflow_phase = lcu::get_gameflow_phase(&creds).unwrap_or_default();
+    let gameflow_phase = lcu::get_gameflow_phase_async(&creds).await.unwrap_or_default();
     let phase_elapsed = t1.elapsed();
 
     if creds_elapsed.as_millis() > 50 || phase_elapsed.as_millis() > 50 {
@@ -257,7 +267,7 @@ pub async fn get_live_game(
 
     // ── 1. Champ Select ─────────────────────────────────────────────────────
     if is_champ_select {
-        if let Ok(session) = lcu::get_champ_select(&creds) {
+        if let Ok(session) = lcu::get_champ_select(&creds).await {
             let mut players = Vec::new();
             let mut bans = Vec::new();
 
@@ -491,7 +501,7 @@ pub async fn get_live_game(
 
     // Reuse one allgamedata snapshot per tick to avoid duplicate live client calls.
     let mut players = Vec::new();
-    let alldata = lcu::get_live_client_allgamedata().ok();
+    let alldata = lcu::get_live_client_allgamedata().await.ok();
 
     if let Some(alldata) = alldata.as_ref() {
         if let Some(all_players) = &alldata.all_players {
@@ -612,11 +622,11 @@ pub async fn request_coaching(
             "League Client не запущен".to_string()
         })?;
 
-    let gameflow_phase = lcu::get_gameflow_phase(&creds).unwrap_or_default();
+    let gameflow_phase = lcu::get_gameflow_phase_async(&creds).await.unwrap_or_default();
     let is_champ_select = gameflow_phase == "ChampSelect";
 
     let ctx = if is_champ_select {
-        let session = lcu::get_champ_select(&creds).map_err(|e| {
+        let session = lcu::get_champ_select(&creds).await.map_err(|e| {
             let mut s = coach_state.lock().unwrap();
             s.is_requesting = false;
             e
@@ -711,7 +721,7 @@ pub async fn request_coaching(
         )
     } else {
         // In-game: use allgamedata for rich stats
-        let alldata = lcu::get_live_client_allgamedata().map_err(|e| {
+        let alldata = lcu::get_live_client_allgamedata().await.map_err(|e| {
             let mut s = coach_state.lock().unwrap();
             s.is_requesting = false;
             format!("Не удалось получить данные игры: {}", e)
@@ -750,6 +760,168 @@ pub async fn request_coaching(
 
     tokio::spawn(async move {
         let _ = api_client.stream_coaching(&app_handle, &ctx).await;
+        if let Ok(mut s) = coach_state_arc.lock() {
+            s.is_requesting = false;
+        }
+    });
+
+    Ok(())
+}
+
+// ─── request_draft_advice (Draft Helper) ─────────────────────────────────────
+
+#[tauri::command]
+pub async fn request_draft_advice(
+    app: tauri::AppHandle,
+    api: State<'_, ServerApiClient>,
+    coach_state: State<'_, Arc<Mutex<CoachState>>>,
+    champ_cache: State<'_, Arc<Mutex<ChampionNamesCache>>>,
+) -> Result<(), String> {
+    // Reuse CoachState to prevent concurrent draft requests
+    {
+        let mut state = coach_state.lock().map_err(|e| e.to_string())?;
+        if state.is_requesting {
+            return Err("Запрос уже выполняется".to_string());
+        }
+        state.is_requesting = true;
+    }
+
+    let creds = lcu::detect_lcu_credentials()
+        .ok_or_else(|| {
+            let mut s = coach_state.lock().unwrap();
+            s.is_requesting = false;
+            "League Client не запущен".to_string()
+        })?;
+
+    let gameflow_phase = lcu::get_gameflow_phase_async(&creds).await.unwrap_or_default();
+    if gameflow_phase != "ChampSelect" {
+        let mut s = coach_state.lock().unwrap();
+        s.is_requesting = false;
+        return Err("Draft Helper доступен только во время выбора чемпионов".to_string());
+    }
+
+    let session = lcu::get_champ_select(&creds).await.map_err(|e| {
+        let mut s = coach_state.lock().unwrap();
+        s.is_requesting = false;
+        e
+    })?;
+
+    let (champ_names, _, _) = get_or_fetch_champion_names(&champ_cache).await;
+
+    let mut my_team_players = Vec::new();
+    let mut enemy_team_players = Vec::new();
+
+    if let Some(my_team) = &session.my_team {
+        for p in my_team {
+            my_team_players.push(LivePlayer {
+                puuid: p.puuid.clone().filter(|s| !s.is_empty()),
+                game_name: None,
+                tag_line: None,
+                champion_id: p.champion_id.unwrap_or(0),
+                assigned_position: p.assigned_position.clone(),
+                spell1_id: p.spell1_id.unwrap_or(0),
+                spell2_id: p.spell2_id.unwrap_or(0),
+                team_id: 100,
+                rank: None,
+                is_picking: false,
+            });
+        }
+    }
+    if let Some(their_team) = &session.their_team {
+        for p in their_team {
+            enemy_team_players.push(LivePlayer {
+                puuid: None,
+                game_name: None,
+                tag_line: None,
+                champion_id: p.champion_id.unwrap_or(0),
+                assigned_position: p.assigned_position.clone(),
+                spell1_id: p.spell1_id.unwrap_or(0),
+                spell2_id: p.spell2_id.unwrap_or(0),
+                team_id: 200,
+                rank: None,
+                is_picking: false,
+            });
+        }
+    }
+
+    // Collect champion names for meta fetch
+    let all_champ_names: Vec<String> = my_team_players.iter()
+        .chain(enemy_team_players.iter())
+        .filter_map(|p| champ_names.get(&p.champion_id).cloned())
+        .collect();
+    let champ_meta = ensure_champion_meta(&champ_cache, &all_champ_names).await;
+
+    // Get my puuid
+    let my_puuid = my_team_players.iter()
+        .find(|p| p.puuid.is_some())
+        .and_then(|p| p.puuid.clone());
+
+    // Enrich ranks via server
+    let enrich_players: Vec<EnrichLivePlayer> = my_team_players.iter().chain(enemy_team_players.iter())
+        .map(|p| EnrichLivePlayer {
+            puuid: p.puuid.clone(),
+            game_name: p.game_name.clone(),
+            tag_line: p.tag_line.clone(),
+            champion_id: p.champion_id,
+            assigned_position: p.assigned_position.clone(),
+            spell1_id: p.spell1_id,
+            spell2_id: p.spell2_id,
+            team_id: p.team_id,
+            is_picking: p.is_picking,
+            summoner_id: None,
+        })
+        .collect();
+
+    let enriched = api.enrich_live_game(&EnrichLiveRequest {
+        phase: "champ_select".to_string(),
+        players: enrich_players,
+        bans: vec![],
+        game_time: None,
+        timer: None,
+        my_puuid: my_puuid.clone(),
+        queue_id: None,
+    }).await;
+
+    if let Ok(enriched_data) = enriched {
+        my_team_players = enriched_data.my_team;
+        enemy_team_players = enriched_data.enemy_team;
+    }
+
+    // Fetch champion pool from server (player's match stats)
+    let champion_pool: Vec<ChampionPoolEntry> = if let Some(ref puuid) = my_puuid {
+        match api.get_matches_and_stats(puuid).await {
+            Ok(stats) => stats.champion_stats.iter()
+                .filter(|s| s.games >= 2)
+                .take(15)
+                .map(|s| ChampionPoolEntry {
+                    champion_name: s.champion_name.clone(),
+                    games: s.games,
+                    winrate: s.winrate,
+                })
+                .collect(),
+            Err(_) => vec![],
+        }
+    } else {
+        vec![]
+    };
+
+    let ctx = ai_coach::build_context_draft_pick(
+        &session,
+        &my_team_players,
+        &enemy_team_players,
+        &champ_names,
+        &champ_meta,
+        my_puuid.as_deref(),
+        champion_pool,
+    );
+
+    // Spawn streaming task with draft-specific event kinds
+    let api_client = api.inner().clone();
+    let coach_state_arc = Arc::clone(&*coach_state);
+    let app_handle = app.clone();
+
+    tokio::spawn(async move {
+        let _ = api_client.stream_draft_coaching(&app_handle, &ctx).await;
         if let Ok(mut s) = coach_state_arc.lock() {
             s.is_requesting = false;
         }
@@ -1073,7 +1245,7 @@ pub async fn get_gold_comparison(
     item_cache: State<'_, Arc<Mutex<ItemCostCache>>>,
     champ_cache: State<'_, Arc<Mutex<ChampionNamesCache>>>,
 ) -> Result<GoldComparisonData, String> {
-    let alldata = lcu::get_live_client_allgamedata()
+    let alldata = lcu::get_live_client_allgamedata().await
         .map_err(|_| "Live Client API недоступен".to_string())?;
 
     let players = alldata.all_players.as_ref()

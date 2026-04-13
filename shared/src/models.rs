@@ -513,7 +513,31 @@ pub fn dto_to_participants(m: &MatchDto) -> Vec<MatchParticipantDetail> {
 
 // --- Helper: convert MatchDto to MatchSummary ---
 
+// --- Matchup Stats ---
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MatchupStat {
+    pub enemy_champion_id: i64,
+    pub enemy_champion_name: String,
+    pub position: String,
+    pub games: i32,
+    pub wins: i32,
+    pub winrate: f64,
+    pub avg_kills: f64,
+    pub avg_deaths: f64,
+    pub avg_assists: f64,
+}
+
 // --- AI Coach DTOs ---
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ChampionPoolEntry {
+    pub champion_name: String,
+    pub games: i32,
+    pub winrate: f64,
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -567,6 +591,10 @@ pub struct CoachingContext {
     pub my_champion_class: Option<String>,
     pub my_champion_abilities_summary: Option<String>,
     pub my_champion_ally_tips: Option<Vec<String>>,
+    // Draft Helper fields
+    pub draft_pick_order: Option<String>,          // "early" | "mid" | "late"
+    pub banned_champions: Vec<String>,             // champion names that are banned
+    pub my_champion_pool: Vec<ChampionPoolEntry>,  // player's champion pool from DB
 }
 
 

@@ -265,6 +265,74 @@ impl Db {
         }
         Ok(())
     }
+    // --- Matchups ---
+
+    pub async fn get_matchups(&self, puuid: &str) -> Result<Vec<MatchupStat>, sqlx::Error> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                enemy.champion_id   AS enemy_champion_id,
+                enemy.champion_name  AS enemy_champion_name,
+                me.position          AS position,
+                COUNT(*)::INT        AS games,
+                SUM(CASE WHEN me.win THEN 1 ELSE 0 END)::INT AS wins,
+                (SUM(CASE WHEN me.win THEN 1 ELSE 0 END)::FLOAT / COUNT(*) * 100) AS winrate,
+                (SUM(me.kills)::FLOAT   / COUNT(*)) AS avg_kills,
+                (SUM(me.deaths)::FLOAT  / COUNT(*)) AS avg_deaths,
+                (SUM(me.assists)::FLOAT / COUNT(*)) AS avg_assists
+            FROM matches me
+            JOIN match_participants enemy
+              ON enemy.match_id = me.match_id
+             AND enemy.position = me.position
+             AND enemy.team_id <> (
+                 SELECT mp2.team_id FROM match_participants mp2
+                 WHERE mp2.match_id = me.match_id AND mp2.puuid = me.puuid
+                 LIMIT 1
+             )
+            WHERE me.puuid = $1
+              AND me.position IS NOT NULL
+              AND me.position <> ''
+              AND me.position <> 'UNKNOWN'
+              AND enemy.champion_name IS NOT NULL
+            GROUP BY enemy.champion_id, enemy.champion_name, me.position
+            HAVING COUNT(*) >= 2
+            ORDER BY games DESC, winrate DESC
+            "#
+        )
+        .bind(puuid)
+        .fetch_all(&self.pool)
+        .await?;
+
+        use sqlx::Row;
+        let stats = rows.into_iter().map(|r| {
+            MatchupStat {
+                enemy_champion_id: r.try_get::<i64, _>("enemy_champion_id").unwrap_or(0),
+                enemy_champion_name: r.try_get::<Option<String>, _>("enemy_champion_name").unwrap_or_default().unwrap_or_default(),
+                position: r.try_get::<Option<String>, _>("position").unwrap_or_default().unwrap_or_default(),
+                games: r.try_get::<i32, _>("games").unwrap_or(0),
+                wins: r.try_get::<i32, _>("wins").unwrap_or(0),
+                winrate: {
+                    let w: f64 = r.try_get("winrate").unwrap_or(0.0);
+                    (w * 10.0).round() / 10.0
+                },
+                avg_kills: {
+                    let v: f64 = r.try_get("avg_kills").unwrap_or(0.0);
+                    (v * 10.0).round() / 10.0
+                },
+                avg_deaths: {
+                    let v: f64 = r.try_get("avg_deaths").unwrap_or(0.0);
+                    (v * 10.0).round() / 10.0
+                },
+                avg_assists: {
+                    let v: f64 = r.try_get("avg_assists").unwrap_or(0.0);
+                    (v * 10.0).round() / 10.0
+                },
+            }
+        }).collect();
+
+        Ok(stats)
+    }
+
     pub async fn get_global_dashboard_data(&self) -> Result<GlobalDashboardData, sqlx::Error> {
         // 1. Global Stats
         let total_players: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM accounts")

@@ -86,6 +86,41 @@ impl MatchStage {
 fn build_system_prompt(ctx: &CoachingContext, catalog: Option<&ItemCatalog>) -> String {
     let item_catalog_block = build_item_catalog_block(catalog);
 
+    if ctx.phase == "draft_pick" {
+        let pick_order = ctx.draft_pick_order.as_deref().unwrap_or("mid");
+        let pick_strategy = match pick_order {
+            "early" => "Игрок пикает РАНО (первый/второй). Рекомендуй БЕЗОПАСНЫЕ (safe) и ГИБКИЕ (flex) пики, которые сложно законтрить. НЕ рекомендуй чемпионов, которые легко контрятся без знания вражеского пика",
+            "late" => "Игрок пикает ПОЗДНО (последний/предпоследний). Рекомендуй КОНТРПИКИ на основе вражеского драфта. Учитывай слабости вражеских чемпионов",
+            _ => "Игрок пикает в середине драфта. Учитывай и безопасность пика, и возможность контрпика на основе уже выбранных врагов",
+        };
+
+        let mut prompt = format!(r#"Ты — AI-помощник по драфту в League of Legends. Помогай игроку выбрать лучший пик.
+
+Стратегия пика:
+{pick_strategy}
+
+Структура данных:
+- Блок «=== Я (игрок) ===» — это твой подопечный
+- «Моя команда» — СОЮЗНИКИ. «Вражеская команда» — ПРОТИВНИКИ
+- «Забаненные чемпионы» — НЕ рекомендуй их, они недоступны
+- «Мой чемпион-пул» — чемпионы, на которых игрок реально играет. Приоритет пикам из пула
+
+Правила:
+- Отвечай ТОЛЬКО на русском языке
+- ФОРМАТ ОТВЕТА: от 3 до 5 строк, каждая — рекомендация чемпиона
+- Каждая строка: «- ИмяЧемпиона — причина (максимум 12 слов)»
+- После рекомендаций одна строка: «! Драфту не хватает: [чего]» — ТОЛЬКО если есть явная дыра в командной композиции (нет AP/AD/танка/инициации/и т.д.). Если дыры нет — НЕ пиши эту строку
+- НЕ рекомендуй забаненных чемпионов
+- НЕ рекомендуй уже взятых чемпионов (из обеих команд)
+- Если чемпион из пула игрока подходит — ставь его выше в списке
+- Называй чемпионов по ПОЛНЫМ именам (Мордекайзер, Мисс Фортуна, Чо'Гат)
+- НИКАКОГО текста кроме рекомендаций"#);
+        if !item_catalog_block.is_empty() {
+            prompt.push_str(&item_catalog_block);
+        }
+        return prompt;
+    }
+
     if ctx.phase == "champ_select" {
         let mut prompt = r#"Ты — AI-тренер по League of Legends. Анализируй драфт и давай рекомендации.
 
@@ -183,6 +218,72 @@ fn build_item_catalog_block(catalog: Option<&ItemCatalog>) -> String {
 
 fn build_user_message(ctx: &CoachingContext, catalog: Option<&ItemCatalog>) -> String {
     let mut msg = String::new();
+
+    if ctx.phase == "draft_pick" {
+        let pick_order = ctx.draft_pick_order.as_deref().unwrap_or("mid");
+        let pick_label = match pick_order {
+            "early" => "Ранний пик (первый/второй)",
+            "late" => "Поздний пик (последний/предпоследний)",
+            _ => "Средний пик",
+        };
+        msg.push_str(&format!("Фаза: Помощь с пиком\nПозиция в драфте: {}\n", pick_label));
+
+        // My role
+        if !ctx.my_position.is_empty() {
+            msg.push_str(&format!("Моя роль: {}\n", ctx.my_position));
+        }
+
+        // Bans
+        if !ctx.banned_champions.is_empty() {
+            msg.push_str(&format!("\nЗабаненные чемпионы: {}\n", ctx.banned_champions.join(", ")));
+        }
+
+        // My champion pool
+        if !ctx.my_champion_pool.is_empty() {
+            msg.push_str("\nМой чемпион-пул (на ком я играю):\n");
+            for entry in &ctx.my_champion_pool {
+                msg.push_str(&format!("- {} — {} игр, {}% WR\n", entry.champion_name, entry.games, entry.winrate));
+            }
+        }
+
+        // Already picked allies
+        let picked_allies: Vec<&CoachPlayerInfo> = ctx.my_team.iter()
+            .filter(|p| !p.champion_name.is_empty() && !p.champion_name.starts_with("ChampID:"))
+            .collect();
+        if !picked_allies.is_empty() {
+            msg.push_str("\nМоя команда (уже выбраны):\n");
+            for p in &picked_allies {
+                msg.push_str(&format!("- {} ({})", p.champion_name,
+                    if p.position.is_empty() { "?" } else { &p.position }));
+                if let Some(ref class) = p.champion_class {
+                    msg.push_str(&format!(" — {}", class));
+                }
+                if !p.rank_display.is_empty() {
+                    msg.push_str(&format!(" — {}", p.rank_display));
+                }
+                msg.push('\n');
+            }
+        }
+
+        // Already picked enemies
+        let picked_enemies: Vec<&CoachPlayerInfo> = ctx.enemy_team.iter()
+            .filter(|p| !p.champion_name.is_empty() && !p.champion_name.starts_with("ChampID:"))
+            .collect();
+        if !picked_enemies.is_empty() {
+            msg.push_str("\nВражеская команда (уже выбраны):\n");
+            for p in &picked_enemies {
+                msg.push_str(&format!("- {} ({})", p.champion_name,
+                    if p.position.is_empty() { "?" } else { &p.position }));
+                if let Some(ref class) = p.champion_class {
+                    msg.push_str(&format!(" — {}", class));
+                }
+                msg.push('\n');
+            }
+        }
+
+        msg.push_str("\nПорекомендуй мне лучшие пики для текущего драфта.");
+        return msg;
+    }
 
     if ctx.phase == "champ_select" {
         msg.push_str("Фаза: Выбор чемпионов\n");
@@ -887,6 +988,9 @@ mod tests {
             my_champion_class: Some("Mage".to_string()),
             my_champion_abilities_summary: None,
             my_champion_ally_tips: None,
+            draft_pick_order: None,
+            banned_champions: vec![],
+            my_champion_pool: vec![],
         }
     }
 
@@ -1068,5 +1172,100 @@ mod tests {
     fn format_items_empty_list() {
         let result = format_items_for_player(&[], Some(&sample_catalog()), true);
         assert_eq!(result, "");
+    }
+
+    // ── Draft Helper tests ──────────────────────────────────────────────
+
+    fn sample_draft_context(pick_order: &str) -> CoachingContext {
+        use leagueeye_shared::models::ChampionPoolEntry;
+
+        CoachingContext {
+            phase: "draft_pick".to_string(),
+            game_time_secs: None,
+            my_champion: String::new(),
+            my_position: "top".to_string(),
+            my_gold: None,
+            my_summoner_spells: vec![],
+            my_runes: None,
+            my_stats: None,
+            my_team: vec![
+                sample_player("Jinx", "bottom"),
+                sample_player("Thresh", "utility"),
+            ],
+            enemy_team: vec![
+                sample_player("Zed", "MIDDLE"),
+                sample_player("LeeSin", "jungle"),
+            ],
+            recent_events: vec![],
+            my_champion_resource: None,
+            my_champion_class: None,
+            my_champion_abilities_summary: None,
+            my_champion_ally_tips: None,
+            draft_pick_order: Some(pick_order.to_string()),
+            banned_champions: vec!["Darius".to_string(), "Yasuo".to_string(), "Yone".to_string()],
+            my_champion_pool: vec![
+                ChampionPoolEntry { champion_name: "Mordekaiser".to_string(), games: 25, winrate: 64.0 },
+                ChampionPoolEntry { champion_name: "Sett".to_string(), games: 15, winrate: 53.3 },
+                ChampionPoolEntry { champion_name: "Renekton".to_string(), games: 10, winrate: 50.0 },
+            ],
+        }
+    }
+
+    #[test]
+    fn draft_pick_prompt_recommends_safe_picks_for_early_picker() {
+        let ctx = sample_draft_context("early");
+        let prompt = build_system_prompt(&ctx, None);
+
+        assert!(prompt.contains("AI-помощник по драфту"));
+        assert!(prompt.contains("БЕЗОПАСНЫЕ (safe)"));
+        assert!(prompt.contains("ГИБКИЕ (flex)"));
+        assert!(!prompt.contains("КОНТРПИКИ"));
+    }
+
+    #[test]
+    fn draft_pick_prompt_recommends_counterpicks_for_late_picker() {
+        let ctx = sample_draft_context("late");
+        let prompt = build_system_prompt(&ctx, None);
+
+        assert!(prompt.contains("AI-помощник по драфту"));
+        assert!(prompt.contains("КОНТРПИКИ"));
+        assert!(!prompt.contains("БЕЗОПАСНЫЕ (safe)"));
+    }
+
+    #[test]
+    fn draft_pick_user_message_includes_bans_and_picks() {
+        let ctx = sample_draft_context("late");
+        let message = build_user_message(&ctx, None);
+
+        assert!(message.contains("Фаза: Помощь с пиком"));
+        assert!(message.contains("Поздний пик"));
+        assert!(message.contains("Моя роль: top"));
+        assert!(message.contains("Забаненные чемпионы: Darius, Yasuo, Yone"));
+        assert!(message.contains("Вражеская команда (уже выбраны):"));
+        assert!(message.contains("Zed"));
+        assert!(message.contains("LeeSin"));
+    }
+
+    #[test]
+    fn draft_pick_user_message_includes_champion_pool() {
+        let ctx = sample_draft_context("early");
+        let message = build_user_message(&ctx, None);
+
+        assert!(message.contains("Мой чемпион-пул"));
+        assert!(message.contains("Mordekaiser"));
+        assert!(message.contains("25 игр"));
+        assert!(message.contains("64%"));
+        assert!(message.contains("Sett"));
+    }
+
+    #[test]
+    fn draft_pick_prompt_does_not_include_match_stage() {
+        let ctx = sample_draft_context("mid");
+        let prompt = build_system_prompt(&ctx, None);
+
+        assert!(!prompt.contains("Стадия матча сейчас:"));
+        assert!(!prompt.contains("early game"));
+        assert!(!prompt.contains("mid game"));
+        assert!(prompt.contains("середине драфта"));
     }
 }

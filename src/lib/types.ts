@@ -186,13 +186,21 @@ export interface GlobalDashboardData {
 // --- AI Coach ---
 
 export interface CoachStreamPayload {
-  kind: "start" | "delta" | "end" | "error";
+  kind: "start" | "delta" | "end" | "error" | "draft-start" | "draft-delta" | "draft-end" | "draft-error";
   text: string | null;
 }
 
 export interface CoachMessage {
   text: string;
   timestamp: number;
+}
+
+// --- Draft Helper ---
+
+export interface ChampionPoolEntry {
+  championName: string;
+  games: number;
+  winrate: number;
 }
 
 // --- Gold Comparison ---
@@ -209,6 +217,20 @@ export interface LaneGoldComparison {
   enemyChampionName: string;
   enemyGold: number;
   goldDiff: number;
+}
+
+// --- Matchup Stats ---
+
+export interface MatchupStat {
+  enemyChampionId: number;
+  enemyChampionName: string;
+  position: string;
+  games: number;
+  wins: number;
+  winrate: number;
+  avgKills: number;
+  avgDeaths: number;
+  avgAssists: number;
 }
 
 // --- Updates ---

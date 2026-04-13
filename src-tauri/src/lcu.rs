@@ -309,14 +309,14 @@ fn find_league_dir_from_process() -> Option<PathBuf> {
     None
 }
 
-// ── LCU API via reqwest (replaces curl.exe for lower latency) ────────────────
+// ── LCU API via async reqwest ─────────────────────────────────────────────────
 
-/// Lazy-initialized blocking reqwest client with TLS verification disabled
+/// Lazy-initialized async reqwest client with TLS verification disabled
 /// (LCU uses a self-signed certificate on 127.0.0.1).
-fn lcu_http_client() -> &'static reqwest::blocking::Client {
-    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+fn lcu_async_http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
-        reqwest::blocking::Client::builder()
+        reqwest::Client::builder()
             .danger_accept_invalid_certs(true)
             .timeout(Duration::from_secs(5))
             .build()
@@ -324,15 +324,16 @@ fn lcu_http_client() -> &'static reqwest::blocking::Client {
     })
 }
 
-/// Makes an authenticated GET request to the LCU API.
-fn curl_lcu(port: u16, token: &str, path: &str) -> Result<String, String> {
+/// Makes an authenticated GET request to the LCU API (async version).
+async fn curl_lcu_async(port: u16, token: &str, path: &str) -> Result<String, String> {
     let url = format!("https://127.0.0.1:{}{}", port, path);
     let start = std::time::Instant::now();
 
-    let response = lcu_http_client()
+    let response = lcu_async_http_client()
         .get(&url)
         .basic_auth("riot", Some(token))
         .send()
+        .await
         .map_err(|e| format!("LCU request error: {}", e))?;
 
     let elapsed = start.elapsed();
@@ -342,6 +343,7 @@ fn curl_lcu(port: u16, token: &str, path: &str) -> Result<String, String> {
 
     let status = response.status();
     let body = response.text()
+        .await
         .map_err(|e| format!("LCU response read error: {}", e))?;
     let body = body.trim().to_string();
 
@@ -354,9 +356,46 @@ fn curl_lcu(port: u16, token: &str, path: &str) -> Result<String, String> {
     Ok(body)
 }
 
+/// Blocking version for use from synchronous threads (e.g. league_window monitor).
+/// Uses curl.exe to avoid reqwest::blocking runtime conflicts.
+fn curl_lcu_blocking(port: u16, token: &str, path: &str) -> Result<String, String> {
+    let url = format!("https://127.0.0.1:{}{}", port, path);
+    let start = std::time::Instant::now();
+
+    let mut cmd = Command::new("curl.exe");
+    cmd.args([
+        "-s",
+        "--max-time", "5",
+        "-k",
+        "-u", &format!("riot:{}", token),
+        &url,
+    ]);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("curl.exe error: {}", e))?;
+
+    let elapsed = start.elapsed();
+    if elapsed.as_millis() > 100 {
+        log::warn!("[perf] curl_lcu_blocking({}) took {:?}", path, elapsed);
+    }
+
+    let body = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    if body.is_empty() {
+        return Err(format!("LCU returned empty response for {} (curl.exe)", path));
+    }
+    if body.contains("\"errorCode\"") {
+        return Err(format!("LCU error for {}: {}", path, body));
+    }
+    Ok(body)
+}
+
 pub async fn get_lcu_identity(creds: &LcuCredentials) -> Result<LcuIdentity, String> {
     // Strategy 1: /lol-summoner/v1/current-summoner (gives gameName, tagLine, icon, level)
-    if let Ok(body) = curl_lcu(creds.port, &creds.token, "/lol-summoner/v1/current-summoner") {
+    if let Ok(body) = curl_lcu_async(creds.port, &creds.token, "/lol-summoner/v1/current-summoner").await {
         if let Ok(s) = serde_json::from_str::<LcuCurrentSummoner>(&body) {
             if let (Some(gn), Some(tl)) = (s.game_name.filter(|n| !n.is_empty()), s.tag_line.filter(|t| !t.is_empty())) {
                 return Ok(LcuIdentity {
@@ -368,7 +407,7 @@ pub async fn get_lcu_identity(creds: &LcuCredentials) -> Result<LcuIdentity, Str
     }
 
     // Strategy 2: /lol-chat/v1/me (lighter endpoint, works more broadly)
-    if let Ok(body) = curl_lcu(creds.port, &creds.token, "/lol-chat/v1/me") {
+    if let Ok(body) = curl_lcu_async(creds.port, &creds.token, "/lol-chat/v1/me").await {
         if let Ok(chat) = serde_json::from_str::<LcuChatMe>(&body) {
             if let (Some(gn), Some(tl)) = (chat.game_name.filter(|n| !n.is_empty()), chat.game_tag.filter(|t| !t.is_empty())) {
                 return Ok(LcuIdentity {
@@ -382,8 +421,8 @@ pub async fn get_lcu_identity(creds: &LcuCredentials) -> Result<LcuIdentity, Str
     Err("LCU: не удалось получить Riot ID из клиента".to_string())
 }
 
-pub fn get_champ_select(creds: &LcuCredentials) -> Result<ChampSelectSession, String> {
-    let body = curl_lcu(creds.port, &creds.token, "/lol-champ-select/v1/session")?;
+pub async fn get_champ_select(creds: &LcuCredentials) -> Result<ChampSelectSession, String> {
+    let body = curl_lcu_async(creds.port, &creds.token, "/lol-champ-select/v1/session").await?;
     serde_json::from_str::<ChampSelectSession>(&body)
         .map_err(|e| format!("Champ select parse error: {}", e))
 }
@@ -393,6 +432,7 @@ pub fn is_lcu_running() -> bool {
 }
 
 /// Returns the current gameflow phase from the LCU (cached with 2s TTL).
+/// Sync version for use from blocking contexts (league_window monitor, overlay_policy).
 /// Possible values: "None", "Lobby", "Matchmaking", "ReadyCheck",
 /// "ChampSelect", "GameStart", "InProgress", "WaitingForStats",
 /// "EndOfGame", "Reconnect", etc.
@@ -406,7 +446,7 @@ pub fn get_gameflow_phase(creds: &LcuCredentials) -> Result<String, String> {
         }
     }
 
-    let result = get_gameflow_phase_fresh(creds);
+    let result = get_gameflow_phase_fresh_blocking(creds);
 
     if let Ok(mut guard) = GAMEFLOW_CACHE.lock() {
         *guard = Some(CachedGameflowPhase {
@@ -419,11 +459,36 @@ pub fn get_gameflow_phase(creds: &LcuCredentials) -> Result<String, String> {
     result
 }
 
-fn get_gameflow_phase_fresh(creds: &LcuCredentials) -> Result<String, String> {
-    let body = curl_lcu(creds.port, &creds.token, "/lol-gameflow/v1/gameflow-phase")?;
-    // The response is a JSON string like "InProgress" (with quotes)
+fn get_gameflow_phase_fresh_blocking(creds: &LcuCredentials) -> Result<String, String> {
+    let body = curl_lcu_blocking(creds.port, &creds.token, "/lol-gameflow/v1/gameflow-phase")?;
     let phase = body.trim().trim_matches('"').to_string();
     Ok(phase)
+}
+
+/// Async version for use from Tauri async commands.
+pub async fn get_gameflow_phase_async(creds: &LcuCredentials) -> Result<String, String> {
+    // Return cached result if same port and TTL not expired
+    if let Ok(guard) = GAMEFLOW_CACHE.lock() {
+        if let Some(cached) = guard.as_ref() {
+            if cached.port == creds.port && cached.updated_at.elapsed() < GAMEFLOW_CACHE_TTL {
+                return cached.value.clone();
+            }
+        }
+    }
+
+    let body = curl_lcu_async(creds.port, &creds.token, "/lol-gameflow/v1/gameflow-phase").await?;
+    let phase = body.trim().trim_matches('"').to_string();
+    let result = Ok(phase);
+
+    if let Ok(mut guard) = GAMEFLOW_CACHE.lock() {
+        *guard = Some(CachedGameflowPhase {
+            value: result.clone(),
+            port: creds.port,
+            updated_at: Instant::now(),
+        });
+    }
+
+    result
 }
 
 // ── Live Client Data API (game client on :2999) ─────────────────────────────
@@ -438,12 +503,12 @@ pub struct LiveClientPlayer {
     pub team: Option<String>,
 }
 
-/// Lazy-initialized blocking reqwest client for the Live Client Data API (localhost:2999).
+/// Lazy-initialized async reqwest client for the Live Client Data API (localhost:2999).
 /// Also uses a self-signed certificate.
-fn live_client_http_client() -> &'static reqwest::blocking::Client {
-    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+fn live_client_async_http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
-        reqwest::blocking::Client::builder()
+        reqwest::Client::builder()
             .danger_accept_invalid_certs(true)
             .timeout(Duration::from_secs(2))
             .build()
@@ -451,12 +516,13 @@ fn live_client_http_client() -> &'static reqwest::blocking::Client {
     })
 }
 
-pub fn get_live_client_playerlist() -> Result<Vec<LiveClientPlayer>, String> {
+pub async fn get_live_client_playerlist() -> Result<Vec<LiveClientPlayer>, String> {
     let start = std::time::Instant::now();
 
-    let response = live_client_http_client()
+    let response = live_client_async_http_client()
         .get("https://127.0.0.1:2999/liveclientdata/playerlist")
         .send()
+        .await
         .map_err(|e| format!("Live Client API error: {}", e))?;
 
     let elapsed = start.elapsed();
@@ -465,6 +531,7 @@ pub fn get_live_client_playerlist() -> Result<Vec<LiveClientPlayer>, String> {
     }
 
     let body = response.text()
+        .await
         .map_err(|e| format!("Live Client response read error: {}", e))?;
     let body = body.trim().to_string();
 
@@ -624,12 +691,13 @@ pub struct LiveGameInfo {
     pub game_mode: Option<String>,
 }
 
-pub fn get_live_client_allgamedata() -> Result<LiveAllGameData, String> {
+pub async fn get_live_client_allgamedata() -> Result<LiveAllGameData, String> {
     let start = std::time::Instant::now();
 
-    let response = live_client_http_client()
+    let response = live_client_async_http_client()
         .get("https://127.0.0.1:2999/liveclientdata/allgamedata")
         .send()
+        .await
         .map_err(|e| format!("Live Client allgamedata error: {}", e))?;
 
     let elapsed = start.elapsed();
@@ -638,6 +706,7 @@ pub fn get_live_client_allgamedata() -> Result<LiveAllGameData, String> {
     }
 
     let body = response.text()
+        .await
         .map_err(|e| format!("Live Client allgamedata read error: {}", e))?;
     let body = body.trim().to_string();
 

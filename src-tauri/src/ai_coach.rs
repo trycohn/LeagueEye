@@ -1,4 +1,5 @@
 use crate::lcu;
+use crate::lcu::ChampSelectSession;
 use crate::models::*;
 use std::collections::HashMap;
 
@@ -249,6 +250,9 @@ pub fn build_context_from_allgamedata(
         my_champion_class: my_class,
         my_champion_abilities_summary: my_abilities_summary,
         my_champion_ally_tips: my_ally_tips,
+        draft_pick_order: None,
+        banned_champions: vec![],
+        my_champion_pool: vec![],
     })
 }
 
@@ -349,5 +353,155 @@ pub fn build_context_champ_select(
         my_champion_class: my_class,
         my_champion_abilities_summary: my_abilities_summary,
         my_champion_ally_tips: my_ally_tips,
+        draft_pick_order: None,
+        banned_champions: vec![],
+        my_champion_pool: vec![],
+    }
+}
+
+// ─── Determine pick order from champ select actions ─────────────────────────
+
+/// Determines the pick order position for the player ("early", "mid", "late")
+/// based on the champ select actions array and the player's cell_id.
+fn determine_pick_order(session: &ChampSelectSession, my_cell_id: i32) -> String {
+    let actions = match &session.actions {
+        Some(a) => a,
+        None => return "mid".to_string(),
+    };
+
+    // Collect all pick action groups (each group = a simultaneous pick round)
+    let mut pick_rounds: Vec<Vec<i32>> = Vec::new();
+    for group in actions {
+        let pick_cells: Vec<i32> = group.iter()
+            .filter(|a| a.action_type.as_deref() == Some("pick"))
+            .filter_map(|a| a.actor_cell_id)
+            .collect();
+        if !pick_cells.is_empty() {
+            pick_rounds.push(pick_cells);
+        }
+    }
+
+    if pick_rounds.is_empty() {
+        return "mid".to_string();
+    }
+
+    // Find which round the player is in
+    let total_rounds = pick_rounds.len();
+    for (idx, round) in pick_rounds.iter().enumerate() {
+        if round.contains(&my_cell_id) {
+            if idx == 0 {
+                return "early".to_string();
+            } else if idx >= total_rounds - 1 {
+                return "late".to_string();
+            } else {
+                return "mid".to_string();
+            }
+        }
+    }
+
+    "mid".to_string()
+}
+
+// ─── Build coaching context for draft pick assistance ───────────────────────
+
+pub fn build_context_draft_pick(
+    session: &ChampSelectSession,
+    my_team: &[LivePlayer],
+    enemy_team: &[LivePlayer],
+    champ_names: &HashMap<i64, String>,
+    champion_meta: &HashMap<String, ChampionMetaInfo>,
+    my_puuid: Option<&str>,
+    champion_pool: Vec<ChampionPoolEntry>,
+) -> CoachingContext {
+    // Find my cell_id from the session
+    let my_cell_id = my_puuid.and_then(|puuid| {
+        session.my_team.as_ref()?.iter()
+            .find(|p| p.puuid.as_deref() == Some(puuid))
+            .and_then(|p| p.cell_id)
+    }).unwrap_or(-1);
+
+    let pick_order = determine_pick_order(session, my_cell_id);
+
+    // Collect banned champion names
+    let mut banned_champions = Vec::new();
+    if let Some(bans) = &session.bans {
+        if let Some(my_bans) = &bans.my_team_bans {
+            for &cid in my_bans {
+                if cid > 0 {
+                    if let Some(name) = champ_names.get(&cid) {
+                        banned_champions.push(name.clone());
+                    }
+                }
+            }
+        }
+        if let Some(their_bans) = &bans.their_team_bans {
+            for &cid in their_bans {
+                if cid > 0 {
+                    if let Some(name) = champ_names.get(&cid) {
+                        banned_champions.push(name.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // Build team info using the same logic as champ_select
+    let to_info = |p: &LivePlayer| -> CoachPlayerInfo {
+        let champ = champ_names.get(&p.champion_id)
+            .cloned()
+            .unwrap_or_else(|| format!("ChampID:{}", p.champion_id));
+        let rank_display = p.rank.as_ref()
+            .map(|r| format!("{} {} {} LP ({}% WR)", r.tier, r.rank, r.lp, r.winrate))
+            .unwrap_or_else(|| "Unranked".to_string());
+
+        let meta = champion_meta.get(&champ);
+
+        CoachPlayerInfo {
+            champion_name: champ,
+            position: p.assigned_position.clone().unwrap_or_default(),
+            rank_display,
+            kills: 0,
+            deaths: 0,
+            assists: 0,
+            cs: 0,
+            level: 1,
+            items: vec![],
+            summoner_spells: vec![],
+            keystone_rune: String::new(),
+            is_dead: false,
+            respawn_timer: 0.0,
+            champion_resource: meta.map(|m| m.resource.clone()),
+            champion_class: meta.and_then(|m| m.tags.first().cloned()),
+        }
+    };
+
+    let my_champ = my_puuid
+        .and_then(|puuid| my_team.iter().find(|p| p.puuid.as_deref() == Some(puuid)))
+        .map(|p| champ_names.get(&p.champion_id).cloned().unwrap_or_default())
+        .unwrap_or_default();
+    let my_pos = my_puuid
+        .and_then(|puuid| my_team.iter().find(|p| p.puuid.as_deref() == Some(puuid)))
+        .and_then(|p| p.assigned_position.clone())
+        .unwrap_or_default();
+
+    CoachingContext {
+        phase: "draft_pick".to_string(),
+        game_time_secs: None,
+        my_champion: my_champ,
+        my_position: my_pos,
+        my_gold: None,
+        my_summoner_spells: vec![],
+        my_runes: None,
+        my_stats: None,
+        my_team: my_team.iter().map(to_info).collect(),
+        enemy_team: enemy_team.iter().map(to_info).collect(),
+        recent_events: vec![],
+        my_champion_resource: None,
+        my_champion_class: None,
+        my_champion_abilities_summary: None,
+        my_champion_ally_tips: None,
+        draft_pick_order: Some(pick_order),
+        banned_champions,
+        my_champion_pool: champion_pool,
     }
 }

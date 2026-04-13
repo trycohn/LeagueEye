@@ -6,6 +6,7 @@ import { ProfileCard } from "./components/ProfileCard";
 import { MasteryList } from "./components/MasteryList";
 import { MatchHistory } from "./components/MatchHistory";
 import { ChampionStats } from "./components/ChampionStats";
+import { PlayerTrends } from "./components/PlayerTrends";
 import { AccountBadge } from "./components/AccountBadge";
 import { LiveGameView } from "./components/LiveGameView";
 import { useRiotApi } from "./hooks/useRiotApi";
@@ -354,6 +355,11 @@ export default function App() {
                 <ChampionStats stats={championStats} />
               </div>
             </div>
+
+            <PlayerTrends
+              matches={matches}
+              puuid={profile.puuid}
+            />
           </div>
         )}
       </main>

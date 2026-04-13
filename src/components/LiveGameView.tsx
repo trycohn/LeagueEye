@@ -1,6 +1,7 @@
 import type { LiveGameData } from "../lib/types";
 import { LivePlayerRow } from "./LivePlayerRow";
 import { CoachPanel } from "./CoachPanel";
+import { DraftHelperPanel } from "./DraftHelperPanel";
 import { useChampionNames } from "../hooks/useChampionNames";
 import { championIconUrl, formatDuration } from "../lib/ddragon";
 import { Swords, Clock, Shield, Ban } from "lucide-react";
@@ -94,6 +95,9 @@ export function LiveGameView({ data, myPuuid }: Props) {
           phase={data.phase}
         />
       </div>
+
+      {/* Draft Helper (only during champ select) */}
+      {data.phase === "champ_select" && <DraftHelperPanel />}
 
       {/* AI Coach */}
       <CoachPanel />

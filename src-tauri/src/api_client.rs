@@ -92,6 +92,10 @@ impl ServerApiClient {
         self.get(&format!("/api/players/{}/matches", puuid)).await
     }
 
+    pub async fn get_matchups(&self, puuid: &str) -> Result<Vec<MatchupStat>, String> {
+        self.get(&format!("/api/players/{}/matchups", puuid)).await
+    }
+
     pub async fn load_more_matches(&self, puuid: &str, offset: usize, limit: usize) -> Result<Vec<MatchSummary>, String> {
         let result: MatchesAndStats = self.get(&format!(
             "/api/players/{}/matches?offset={}&limit={}", puuid, offset, limit
@@ -170,6 +174,76 @@ impl ServerApiClient {
                     let data = data.trim_start();
                     if let Ok(payload) = serde_json::from_str::<CoachStreamPayload>(data) {
                         let _ = app.emit("coach-stream", &payload);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    // --- Draft Helper streaming (reuses coach endpoint with draft-* event kinds) ---
+
+    pub async fn stream_draft_coaching(
+        &self,
+        app: &AppHandle,
+        ctx: &CoachingContext,
+    ) -> Result<(), String> {
+        let url = format!("{}/api/coach/stream", self.base_url);
+
+        let response = self.client
+            .post(&url)
+            .json(ctx)
+            .send()
+            .await
+            .map_err(|e| {
+                let msg = format!("Ошибка соединения с сервером: {}", e);
+                let _ = app.emit("coach-stream", CoachStreamPayload {
+                    kind: "draft-error".to_string(),
+                    text: Some(msg.clone()),
+                });
+                msg
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            let msg = format!("Ошибка сервера ({}): {}", status, body);
+            let _ = app.emit("coach-stream", CoachStreamPayload {
+                kind: "draft-error".to_string(),
+                text: Some(msg.clone()),
+            });
+            return Err(msg);
+        }
+
+        let mut buffer = String::new();
+        let mut response = response;
+
+        while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(pos) = buffer.find('\n') {
+                let line = buffer[..pos].trim_end().to_string();
+                buffer = buffer[pos + 1..].to_string();
+
+                if line.is_empty() || line.starts_with(':') {
+                    continue;
+                }
+                if let Some(data) = line.strip_prefix("data:") {
+                    let data = data.trim_start();
+                    if let Ok(payload) = serde_json::from_str::<CoachStreamPayload>(data) {
+                        // Remap kind: start→draft-start, delta→draft-delta, end→draft-end, error→draft-error
+                        let draft_kind = match payload.kind.as_str() {
+                            "start" => "draft-start",
+                            "delta" => "draft-delta",
+                            "end" => "draft-end",
+                            "error" => "draft-error",
+                            other => other,
+                        };
+                        let _ = app.emit("coach-stream", CoachStreamPayload {
+                            kind: draft_kind.to_string(),
+                            text: payload.text,
+                        });
                     }
                 }
             }

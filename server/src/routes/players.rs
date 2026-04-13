@@ -49,6 +49,16 @@ pub async fn get_mastery(
     Ok(Json(result))
 }
 
+// GET /api/players/{puuid}/matchups
+pub async fn get_matchups(
+    State(state): State<Arc<AppState>>,
+    Path(puuid): Path<String>,
+) -> Result<Json<Vec<MatchupStat>>, String> {
+    let matchups = state.db.get_matchups(&puuid).await
+        .map_err(|e| e.to_string())?;
+    Ok(Json(matchups))
+}
+
 // GET /api/players/{puuid}/matches?offset=0&limit=15
 #[derive(serde::Deserialize)]
 pub struct MatchesQuery {
