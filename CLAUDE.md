@@ -17,7 +17,7 @@ npx tsc --noEmit        # TypeScript type-check
 # Server
 cargo run -p leagueeye-server              # Dev server (reads server/.env)
 cargo build -p leagueeye-server --release  # Production build
-
+ 
 # Tests
 cargo test -p league-eye                   # Small Rust unit-test set (overlay policy)
 cargo test -p leagueeye-server             # Small Rust unit-test set (live enrichment helpers)
@@ -77,7 +77,7 @@ React UI ──invoke()──► Tauri commands ──HTTP──► Axum server 
 - **`shared/`** (`leagueeye-shared`) — All DTOs shared between server and client. Single source of truth for data shapes.
 - **`server/`** (`leagueeye-server`) — Axum HTTP server: Riot API with rate limiter, PostgreSQL, AI Coach SSE streaming.
 - **`src-tauri/`** (`league-eye`) — Thin Tauri client: LCU detection, overlay windows, keyboard hooks, HTTP proxy to server.
-
+ 
 ### Server (server/src/)
 
 - **main.rs** — Axum router, PostgreSQL pool (sqlx), auto-runs migrations, `AppState` with `RiotApiClient`, `Db`, optional `AiCoachConfig`, `ItemCatalog`, `ChampionCatalog` (Anthropic / OpenRouter / DeepSeek, plus optional OpenRouter attribution headers)
