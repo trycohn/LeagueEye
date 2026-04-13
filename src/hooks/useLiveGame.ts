@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { LiveGameData } from "../lib/types";
 
-const CHAMP_SELECT_INTERVAL = 1_000;
+const CHAMP_SELECT_INTERVAL = 2_000;
 const IN_GAME_INTERVAL = 5_000;
 const IDLE_INTERVAL = 3_000;
 

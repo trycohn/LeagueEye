@@ -118,7 +118,14 @@ impl ServerApiClient {
     // --- Live game enrichment ---
 
     pub async fn enrich_live_game(&self, request: &EnrichLiveRequest) -> Result<LiveGameData, String> {
-        self.post("/api/live/enrich", request).await
+        // 5s timeout: enrich runs in background during champ select, so we
+        // don't want it to hang indefinitely if the server is overloaded.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.post::<LiveGameData, _>("/api/live/enrich", request),
+        )
+        .await
+        .map_err(|_| "Enrich запрос превысил таймаут (5с)".to_string())?
     }
 
     // --- AI Coach streaming ---

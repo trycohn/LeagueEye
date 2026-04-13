@@ -83,6 +83,14 @@ impl RiotApiClient {
 
     async fn get<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<T, String> {
         self.rate_limit().await;
+        self.get_raw(url).await
+    }
+
+    /// Perform a GET request WITHOUT going through the rate limiter.
+    /// Used for live-game enrichment (ranks, puuid resolution) which is
+    /// latency-sensitive and runs in background — we rely on Riot 429 retry
+    /// instead of pre-emptive throttling to avoid blocking the draft UI.
+    async fn get_raw<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<T, String> {
 
         let response = self
             .client
@@ -103,7 +111,7 @@ impl RiotApiClient {
                 .unwrap_or(2);
 
             sleep(Duration::from_secs(retry_after)).await;
-            return Box::pin(self.get(url)).await;
+            return Box::pin(self.get_raw(url)).await;
         }
 
         if status == reqwest::StatusCode::NOT_FOUND {
@@ -197,5 +205,35 @@ impl RiotApiClient {
             }
         }
         results
+    }
+
+    // ── Unthrottled methods for live-game enrichment ────────────────────────
+    // These bypass the rate limiter to avoid blocking the champ select UI.
+    // They still handle Riot 429 responses via retry, but don't wait in queue
+    // behind match-history fetches or other background work.
+
+    pub async fn get_account_by_riot_id_fast(&self, game_name: &str, tag_line: &str) -> Result<RiotAccount, String> {
+        let url = format!("{}/riot/account/v1/accounts/by-riot-id/{}/{}", REGIONAL_URL, game_name, tag_line);
+        self.get_raw(&url).await
+    }
+
+    pub async fn get_league_entries_fast(&self, summoner_id: &str) -> Result<Vec<LeagueEntry>, String> {
+        let url = format!("{}/lol/league/v4/entries/by-summoner/{}", PLATFORM_URL, summoner_id);
+        self.get_raw(&url).await
+    }
+
+    pub async fn get_league_entries_by_puuid_fast(&self, puuid: &str) -> Result<Vec<LeagueEntry>, String> {
+        let url = format!("{}/lol/league/v4/entries/by-puuid/{}", PLATFORM_URL, puuid);
+        self.get_raw(&url).await
+    }
+
+    pub async fn get_active_game_fast(&self, puuid: &str) -> Result<SpectatorGame, String> {
+        let url_summoner = format!("{}/lol/summoner/v4/summoners/by-puuid/{}", PLATFORM_URL, puuid);
+        let summoner: Summoner = self.get_raw(&url_summoner).await?;
+        let summoner_id = summoner
+            .id
+            .ok_or_else(|| "Не удалось получить summonerId для Spectator API".to_string())?;
+        let url = format!("{}/lol/spectator/v5/active-games/by-summoner/{}", PLATFORM_URL, summoner_id);
+        self.get_raw(&url).await
     }
 }

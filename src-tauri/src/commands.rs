@@ -346,137 +346,79 @@ pub async fn get_live_game(
                 queue_id: None,
             };
 
-            // Two-phase poll: if we already have enriched data from a previous poll,
-            // return fresh LCU data merged with cached ranks immediately, then
-            // refresh enrichment in the background for the next poll.
-            let has_cached_ranks = {
-                if let Ok(ls) = last_live.lock() {
-                    ls.data.as_ref()
-                        .filter(|d| d.phase == "champ_select")
-                        .map(|d| d.my_team.iter().chain(d.enemy_team.iter()).any(|p| p.rank.is_some()))
-                        .unwrap_or(false)
-                } else {
-                    false
+            // Always non-blocking: return fresh LCU data merged with any cached
+            // enrichment immediately, then fire background enrichment for next poll.
+            // This ensures Ban/Pick UI never freezes waiting for server/Riot API.
+            let cached_data = last_live.lock().ok()
+                .and_then(|ls| ls.data.clone())
+                .filter(|d| d.phase == "champ_select");
+
+            let build_player = |p: &EnrichLivePlayer, cached: &Option<LiveGameData>| -> LivePlayer {
+                // Try to find matching rank from cached data by puuid or position
+                let rank = cached.as_ref().and_then(|cd| {
+                    let team = if p.team_id == 100 { &cd.my_team } else { &cd.enemy_team };
+                    // Match by puuid first
+                    if let Some(ref puuid) = p.puuid {
+                        if let Some(found) = team.iter().find(|cp| cp.puuid.as_deref() == Some(puuid)) {
+                            return found.rank.clone();
+                        }
+                    }
+                    // Fallback: match by position in team
+                    let idx = if p.team_id == 100 {
+                        request.players.iter().filter(|rp| rp.team_id == 100).position(|rp| std::ptr::eq(rp, p))
+                    } else {
+                        request.players.iter().filter(|rp| rp.team_id == 200).position(|rp| std::ptr::eq(rp, p))
+                    };
+                    idx.and_then(|i| team.get(i)).and_then(|cp| cp.rank.clone())
+                });
+
+                LivePlayer {
+                    puuid: p.puuid.clone(),
+                    game_name: p.game_name.clone(),
+                    tag_line: p.tag_line.clone(),
+                    champion_id: p.champion_id,
+                    assigned_position: p.assigned_position.clone(),
+                    spell1_id: p.spell1_id,
+                    spell2_id: p.spell2_id,
+                    team_id: p.team_id,
+                    rank,
+                    is_picking: p.is_picking,
                 }
             };
 
-            if has_cached_ranks {
-                // Build immediate result with fresh LCU data + cached ranks
-                let cached_data = last_live.lock().ok()
-                    .and_then(|ls| ls.data.clone());
+            let result = LiveGameData {
+                phase: "champ_select".to_string(),
+                queue_id: None,
+                my_team: request.players.iter().filter(|p| p.team_id == 100)
+                    .map(|p| build_player(p, &cached_data)).collect(),
+                enemy_team: request.players.iter().filter(|p| p.team_id == 200)
+                    .map(|p| build_player(p, &cached_data)).collect(),
+                bans: request.bans.clone(),
+                game_time: None,
+                timer: request.timer.clone(),
+            };
 
-                let build_player = |p: &EnrichLivePlayer, cached: &Option<LiveGameData>| -> LivePlayer {
-                    // Try to find matching rank from cached data by puuid or position
-                    let rank = cached.as_ref().and_then(|cd| {
-                        let team = if p.team_id == 100 { &cd.my_team } else { &cd.enemy_team };
-                        // Match by puuid first
-                        if let Some(ref puuid) = p.puuid {
-                            if let Some(found) = team.iter().find(|cp| cp.puuid.as_deref() == Some(puuid)) {
-                                return found.rank.clone();
-                            }
-                        }
-                        // Fallback: match by position in team
-                        let idx = if p.team_id == 100 {
-                            request.players.iter().filter(|rp| rp.team_id == 100).position(|rp| std::ptr::eq(rp, p))
-                        } else {
-                            request.players.iter().filter(|rp| rp.team_id == 200).position(|rp| std::ptr::eq(rp, p))
-                        };
-                        idx.and_then(|i| team.get(i)).and_then(|cp| cp.rank.clone())
-                    });
-
-                    LivePlayer {
-                        puuid: p.puuid.clone(),
-                        game_name: p.game_name.clone(),
-                        tag_line: p.tag_line.clone(),
-                        champion_id: p.champion_id,
-                        assigned_position: p.assigned_position.clone(),
-                        spell1_id: p.spell1_id,
-                        spell2_id: p.spell2_id,
-                        team_id: p.team_id,
-                        rank,
-                        is_picking: p.is_picking,
-                    }
-                };
-
-                let result = LiveGameData {
-                    phase: "champ_select".to_string(),
-                    queue_id: None,
-                    my_team: request.players.iter().filter(|p| p.team_id == 100)
-                        .map(|p| build_player(p, &cached_data)).collect(),
-                    enemy_team: request.players.iter().filter(|p| p.team_id == 200)
-                        .map(|p| build_player(p, &cached_data)).collect(),
-                    bans: request.bans.clone(),
-                    game_time: None,
-                    timer: request.timer.clone(),
-                };
-
-                // Fire background enrichment to update ranks for next poll
-                let api_bg = api.inner().clone();
-                let last_live_bg = last_live.inner().clone();
-                tokio::spawn(async move {
-                    match api_bg.enrich_live_game(&request).await {
-                        Ok(enriched) => {
-                            if let Ok(mut ls) = last_live_bg.lock() {
-                                ls.data = Some(enriched);
-                            }
-                        }
-                        Err(e) => {
-                            log::debug!("[live] Background enrichment failed: {}", e);
+            // Fire background enrichment to update ranks for next poll
+            let api_bg = api.inner().clone();
+            let last_live_bg = last_live.inner().clone();
+            tokio::spawn(async move {
+                match api_bg.enrich_live_game(&request).await {
+                    Ok(enriched) => {
+                        if let Ok(mut ls) = last_live_bg.lock() {
+                            ls.data = Some(enriched);
                         }
                     }
-                });
+                    Err(e) => {
+                        log::debug!("[live] Background enrichment failed: {}", e);
+                    }
+                }
+            });
 
-                let cmd_elapsed = cmd_start.elapsed();
-                if cmd_elapsed.as_millis() > 200 {
-                    log::warn!("[perf] get_live_game (champ_select, cached ranks) total: {:?}", cmd_elapsed);
-                }
-                return Ok(result);
+            let cmd_elapsed = cmd_start.elapsed();
+            if cmd_elapsed.as_millis() > 200 {
+                log::warn!("[perf] get_live_game (champ_select) total: {:?}", cmd_elapsed);
             }
-
-            // No cached ranks yet — do synchronous enrichment (first poll)
-            match api.enrich_live_game(&request).await {
-                Ok(result) => {
-                    if let Ok(mut ls) = last_live.lock() { ls.data = Some(result.clone()); }
-                    return Ok(result);
-                }
-                Err(e) => {
-                    log::warn!("[live] Server enrichment failed: {}, returning local data", e);
-                    // Fallback: return un-enriched data (no ranks)
-                    let result = LiveGameData {
-                        phase: "champ_select".to_string(),
-                        queue_id: None,
-                        my_team: request.players.iter().filter(|p| p.team_id == 100).map(|p| LivePlayer {
-                            puuid: p.puuid.clone(),
-                            game_name: p.game_name.clone(),
-                            tag_line: p.tag_line.clone(),
-                            champion_id: p.champion_id,
-                            assigned_position: p.assigned_position.clone(),
-                            spell1_id: p.spell1_id,
-                            spell2_id: p.spell2_id,
-                            team_id: p.team_id,
-                            rank: None,
-                            is_picking: p.is_picking,
-                        }).collect(),
-                        enemy_team: request.players.iter().filter(|p| p.team_id == 200).map(|p| LivePlayer {
-                            puuid: p.puuid.clone(),
-                            game_name: p.game_name.clone(),
-                            tag_line: p.tag_line.clone(),
-                            champion_id: p.champion_id,
-                            assigned_position: p.assigned_position.clone(),
-                            spell1_id: p.spell1_id,
-                            spell2_id: p.spell2_id,
-                            team_id: p.team_id,
-                            rank: None,
-                            is_picking: p.is_picking,
-                        }).collect(),
-                        bans: request.bans,
-                        game_time: None,
-                        timer: request.timer,
-                    };
-                    if let Ok(mut ls) = last_live.lock() { ls.data = Some(result.clone()); }
-                    return Ok(result);
-                }
-            }
+            return Ok(result);
         }
     }
 

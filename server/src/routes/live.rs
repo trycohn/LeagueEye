@@ -161,7 +161,7 @@ pub async fn enrich_live_game(
     // normalized 100=my team / 200=enemy team buckets before hydrating players.
     if req.phase == "in_game" {
         if let Some(ref my_puuid) = req.my_puuid {
-            match state.riot_api.get_active_game(my_puuid).await {
+            match state.riot_api.get_active_game_fast(my_puuid).await {
                 Ok(spec_game) => {
                     let my_spec_team_id = spec_game.participants.iter()
                         .find(|participant| participant.puuid.as_deref() == Some(my_puuid))
@@ -224,7 +224,7 @@ pub async fn enrich_live_game(
                             }
                         }
 
-                        match state.riot_api.get_account_by_riot_id(&gn, &tl).await {
+                        match state.riot_api.get_account_by_riot_id_fast(&gn, &tl).await {
                             Ok(acc) => {
                                 // Store in cache
                                 {
@@ -291,7 +291,7 @@ pub async fn enrich_live_game(
                     }
 
                     // Cache miss — fetch from Riot API
-                    if let Ok(entries) = state.riot_api.get_league_entries_by_puuid(puuid).await {
+                    if let Ok(entries) = state.riot_api.get_league_entries_by_puuid_fast(puuid).await {
                         let ri = build_rank_info(entries);
                         let rank = ri.iter().find(|r| r.queue_type == "RANKED_SOLO_5x5")
                             .or(ri.first())
@@ -312,7 +312,7 @@ pub async fn enrich_live_game(
                 // 2. Fallback: try by summoner_id
                 if let Some(sid) = sid_opt {
                     let sid_str = sid.to_string();
-                    if let Ok(entries) = state.riot_api.get_league_entries(&sid_str).await {
+                    if let Ok(entries) = state.riot_api.get_league_entries_fast(&sid_str).await {
                         let ri = build_rank_info(entries);
                         let rank = ri.iter().find(|r| r.queue_type == "RANKED_SOLO_5x5")
                             .or(ri.first())
