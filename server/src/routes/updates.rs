@@ -23,7 +23,7 @@ fn updates_dir() -> std::path::PathBuf {
 ///   "platforms": {
 ///     "windows-x86_64": {
 ///       "signature": "contents of .sig file",
-///       "url": "https://your-server.com/api/updates/download/LeagueEye_0.3.0_x64-setup.nsis.zip"
+///       "url": "https://your-server.com/api/updates/download/LeagueEye_0.3.0_x64-setup.exe"
 ///     }
 ///   }
 /// }

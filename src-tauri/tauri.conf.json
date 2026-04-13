@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "LeagueEye",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "identifier": "com.leagueeye.app",
   "build": {
     "frontendDist": "../dist",
@@ -51,10 +51,11 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDIxMkUwREQxNDgxQTNFODQKUldTRVBocEkwUTB1SWEvUTZCaUQzMEpIVmJOckNJNW8yV1VBcE1aMkxBRHpJVGdvUzlCOGhmQTAK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRERjI5NDJGNTRCQzZBQkEKUldTNmFyeFVMNVR5VFhLMEFsaUR2ZXdydDdTUFdmeUh0NCtiTGRKSDdyUzRaMUVEQXhaOVF3ckQK",
       "endpoints": [
         "http://213.155.14.229:3000/api/updates/{{target}}/{{arch}}/{{current_version}}"
       ],
+      "dangerousInsecureTransportProtocol": true,
       "windows": {
         "installMode": "passive"
       }

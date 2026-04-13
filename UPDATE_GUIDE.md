@@ -45,19 +45,20 @@ npm run tauri build
 
 | Файл | Назначение |
 |---|---|
-| `LeagueEye_0.3.0_x64-setup.exe` | Обычный инсталлер (для первой установки) |
-| `LeagueEye_0.3.0_x64-setup.nsis.zip` | Архив для автообновления |
-| `LeagueEye_0.3.0_x64-setup.nsis.zip.sig` | Подпись архива |
+| `LeagueEye_0.3.0_x64-setup.exe` | Инсталлер + артефакт автообновления |
+| `LeagueEye_0.3.0_x64-setup.exe.sig` | Подпись для проверки обновления |
+
+> В Tauri v2 с `createUpdaterArtifacts: true` сам `.exe` инсталлер переиспользуется для обновлений (архив `.nsis.zip` не создаётся — это формат v1).
 
 ### 3. Загрузить на сервер
 
 ```powershell
-scp target\release\bundle\nsis\LeagueEye_0.3.0_x64-setup.nsis.zip user@213.155.14.229:/opt/leagueeye/updates/
+scp target\release\bundle\nsis\LeagueEye_0.3.0_x64-setup.exe root@213.155.14.229:/opt/leagueeye/updates/
 ```
 
 ### 4. Создать latest.json на сервере
 
-Открой `.sig` файл — это одна строка текста (подпись). Скопируй её содержимое.
+Открой `.exe.sig` файл — это одна строка текста (подпись). Скопируй её содержимое.
 
 ```bash
 cat > /opt/leagueeye/updates/latest.json << 'EOF'
@@ -67,15 +68,15 @@ cat > /opt/leagueeye/updates/latest.json << 'EOF'
   "pub_date": "2026-04-12T00:00:00Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "ВСТАВИТЬ_СОДЕРЖИМОЕ_ИЗ_.sig_ФАЙЛА",
-      "url": "http://213.155.14.229:3000/api/updates/download/LeagueEye_0.3.0_x64-setup.nsis.zip"
+      "signature": "ВСТАВИТЬ_СОДЕРЖИМОЕ_ИЗ_.exe.sig_ФАЙЛА",
+      "url": "http://213.155.14.229:3000/api/updates/download/LeagueEye_0.3.0_x64-setup.exe"
     }
   }
 }
 EOF
 ```
 
-> Заменить `0.3.0` на актуальную версию, `notes` — описание обновления, `signature` — содержимое `.sig` файла целиком.
+> Заменить `0.3.0` на актуальную версию, `notes` — описание обновления, `signature` — содержимое `.exe.sig` файла целиком.
 
 ### 5. Готово
 
@@ -109,7 +110,7 @@ EOF
   → Если нет — 204 No Content
 
 Приложение (при нажатии "Установить")
-  → GET http://213.155.14.229:3000/api/updates/download/LeagueEye_0.3.0_x64-setup.nsis.zip
+  → GET http://213.155.14.229:3000/api/updates/download/LeagueEye_0.3.0_x64-setup.exe
   → Проверяет подпись публичным ключом
   → Устанавливает (NSIS passive mode)
   → Перезапускается
@@ -121,7 +122,7 @@ EOF
 
 - [ ] Обновить версию в `tauri.conf.json` и `Cargo.toml`
 - [ ] Собрать: `npm run tauri build` (с `TAURI_SIGNING_PRIVATE_KEY_PATH`)
-- [ ] Загрузить `.nsis.zip` на сервер в `/opt/leagueeye/updates/`
+- [ ] Загрузить `.exe` на сервер в `/opt/leagueeye/updates/`
 - [ ] Обновить `latest.json` (version, signature, url, notes)
 - [ ] Проверить: открыть приложение старой версии → Настройки → Проверить обновления
 
@@ -135,8 +136,8 @@ EOF
 - Проверь endpoint: `curl http://213.155.14.229:3000/api/updates/windows/x86_64/0.2.0`
 
 **Ошибка подписи:**
-- Убедись что `.sig` файл был создан тем же приватным ключом, чей публичный ключ в `tauri.conf.json`
-- Скопируй содержимое `.sig` файла полностью, без лишних пробелов/переносов
+- Убедись что `.exe.sig` файл был создан тем же приватным ключом, чей публичный ключ в `tauri.conf.json`
+- Скопируй содержимое `.exe.sig` файла полностью, без лишних пробелов/переносов
 
 **Потерян приватный ключ:**
 - Обновления для текущих пользователей станут невозможны

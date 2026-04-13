@@ -393,10 +393,18 @@ pub fn run() {
         .manage(Arc::new(Mutex::new(ItemCostCache::new())))
         .manage(Arc::new(Mutex::new(LastLiveState::new())))
         .setup(|app| {
-            if cfg!(debug_assertions) {
+            {
+                let log_level = if cfg!(debug_assertions) {
+                    log::LevelFilter::Info
+                } else {
+                    log::LevelFilter::Info
+                };
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
+                        .level(log_level)
+                        .target(tauri_plugin_log::Target::new(
+                            tauri_plugin_log::TargetKind::LogDir { file_name: Some("leagueeye".into()) },
+                        ))
                         .build(),
                 )?;
             }
