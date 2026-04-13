@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "LeagueEye",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "identifier": "com.leagueeye.app",
   "build": {
     "frontendDist": "../dist",
@@ -38,7 +38,8 @@
     "createUpdaterArtifacts": true,
     "windows": {
       "nsis": {
-        "installerIcon": "icons/icon.ico"
+        "installerIcon": "icons/icon.ico",
+        "installerHooks": "nsis-hooks.nsh"
       }
     },
     "icon": [

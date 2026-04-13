@@ -1322,11 +1322,11 @@ pub async fn install_update(
         .map_err(|e| format!("Ошибка проверки: {}", e))?
         .ok_or_else(|| "Нет доступных обновлений".to_string())?;
 
-    log::info!("[updater] Downloading and installing v{}", update.version);
+    log::info!("[updater] Downloading v{}", update.version);
 
-    // Download and install
+    // Step 1: Download the update first (app stays alive during download)
     let mut downloaded: u64 = 0;
-    update.download_and_install(
+    let bytes = update.download(
         |chunk_len, content_len| {
             downloaded += chunk_len as u64;
             log::debug!(
@@ -1336,12 +1336,21 @@ pub async fn install_update(
             );
         },
         || {
-            log::info!("[updater] Download complete, installing...");
+            log::info!("[updater] Download complete");
         },
     )
     .await
-    .map_err(|e| format!("Ошибка установки: {}", e))?;
+    .map_err(|e| format!("Ошибка скачивания: {}", e))?;
 
+    log::info!("[updater] Installing (app will exit on Windows)...");
+
+    // Step 2: Install — on Windows this exits the process and runs NSIS installer
+    // The NSIS hook (nsis-hooks.nsh) will also taskkill the process as a safety net
+    update.install(bytes)
+        .map_err(|e| format!("Ошибка установки: {}", e))?;
+
+    // On Windows we typically never reach here because install() exits the process.
+    // On other platforms, restart manually.
     log::info!("[updater] Update installed, relaunching...");
     app.restart();
 }
