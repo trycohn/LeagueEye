@@ -1271,6 +1271,59 @@ pub async fn get_gold_comparison(
     Ok(GoldComparisonData { lanes, game_time })
 }
 
+// ─── get_app_version ─────────────────────────────────────────────────────────
+
+// ─── Favorites ──────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_favorites(
+    db: State<'_, SharedDb>,
+) -> Result<Vec<FavoritePlayer>, String> {
+    let db = db.lock().map_err(|e| e.to_string())?;
+    db.get_favorites().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn add_favorite(
+    db: State<'_, SharedDb>,
+    puuid: String,
+    game_name: String,
+    tag_line: String,
+    profile_icon_id: i64,
+    source: Option<String>,
+) -> Result<(), String> {
+    let src = source.unwrap_or_else(|| "manual".to_string());
+    let db = db.lock().map_err(|e| e.to_string())?;
+    db.add_favorite(&puuid, &game_name, &tag_line, profile_icon_id, &src)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn remove_favorite(
+    db: State<'_, SharedDb>,
+    puuid: String,
+) -> Result<(), String> {
+    let db = db.lock().map_err(|e| e.to_string())?;
+    db.remove_favorite(&puuid).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn is_favorite(
+    db: State<'_, SharedDb>,
+    puuid: String,
+) -> Result<bool, String> {
+    let db = db.lock().map_err(|e| e.to_string())?;
+    db.is_favorite(&puuid).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_frequent_teammates(
+    api: State<'_, ServerApiClient>,
+    puuid: String,
+) -> Result<Vec<FrequentTeammate>, String> {
+    api.get_frequent_teammates(&puuid).await
+}
+
 // ─── App version & updates ──────────────────────────────────────────────────
 
 #[tauri::command]

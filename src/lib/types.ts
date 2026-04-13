@@ -240,3 +240,23 @@ export interface UpdateInfo {
   body: string | null;
   date: string | null;
 }
+
+// --- Favorites ---
+
+export interface FavoritePlayer {
+  puuid: string;
+  gameName: string;
+  tagLine: string;
+  profileIconId: number;
+  addedAt: number;
+  source: string; // "manual" | "auto"
+}
+
+export interface FrequentTeammate {
+  puuid: string;
+  gameName: string;
+  tagLine: string;
+  gamesTogether: number;
+  winsTogether: number;
+  winrate: number;
+}

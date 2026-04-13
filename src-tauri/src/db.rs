@@ -1,7 +1,7 @@
 use rusqlite::{params, Connection, Result as SqlResult};
 use std::path::PathBuf;
 
-use crate::models::{PlayerProfile, StoredAccount};
+use crate::models::{FavoritePlayer, PlayerProfile, StoredAccount};
 
 /// Minimal local SQLite — only caches the last account for instant startup.
 /// All match data, ranks, and mastery are now on the server.
@@ -33,6 +33,14 @@ impl Db {
                 overlay_id TEXT PRIMARY KEY,
                 x          INTEGER NOT NULL,
                 y          INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS favorites (
+                puuid           TEXT PRIMARY KEY,
+                game_name       TEXT NOT NULL,
+                tag_line        TEXT NOT NULL,
+                profile_icon_id INTEGER NOT NULL DEFAULT 0,
+                added_at        INTEGER NOT NULL,
+                source          TEXT NOT NULL DEFAULT 'manual'
             );
         ",
         )?;
@@ -90,6 +98,59 @@ impl Db {
             })
         })?;
         Ok(rows.next().and_then(|r| r.ok()))
+    }
+
+    // ─── Favorites ──────────────────────────────────────────────────────────
+
+    pub fn get_favorites(&self) -> SqlResult<Vec<FavoritePlayer>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT puuid, game_name, tag_line, profile_icon_id, added_at, source
+             FROM favorites ORDER BY added_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(FavoritePlayer {
+                puuid: row.get(0)?,
+                game_name: row.get(1)?,
+                tag_line: row.get(2)?,
+                profile_icon_id: row.get(3)?,
+                added_at: row.get(4)?,
+                source: row.get(5)?,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn add_favorite(
+        &self,
+        puuid: &str,
+        game_name: &str,
+        tag_line: &str,
+        profile_icon_id: i64,
+        source: &str,
+    ) -> SqlResult<()> {
+        let now = now_ms();
+        self.conn.execute(
+            "INSERT OR REPLACE INTO favorites
+             (puuid, game_name, tag_line, profile_icon_id, added_at, source)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![puuid, game_name, tag_line, profile_icon_id, now, source],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_favorite(&self, puuid: &str) -> SqlResult<()> {
+        self.conn
+            .execute("DELETE FROM favorites WHERE puuid = ?1", params![puuid])?;
+        Ok(())
+    }
+
+    pub fn is_favorite(&self, puuid: &str) -> SqlResult<bool> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM favorites WHERE puuid = ?1",
+            params![puuid],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
     }
 }
 

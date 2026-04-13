@@ -516,6 +516,11 @@ pub fn run() {
             commands::get_app_version,
             commands::check_for_update,
             commands::install_update,
+            commands::get_favorites,
+            commands::add_favorite,
+            commands::remove_favorite,
+            commands::is_favorite,
+            commands::get_frequent_teammates,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

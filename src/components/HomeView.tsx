@@ -1,17 +1,30 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { BarChart, Users, Activity, Swords, Loader2 } from "lucide-react";
-import type { GlobalDashboardData } from "../lib/types";
+import type { GlobalDashboardData, FavoritePlayer, FrequentTeammate } from "../lib/types";
+import { FavoritesPanel } from "./FavoritesPanel";
 
 interface Props {
   onSearch: (gameName: string, tagLine: string) => void;
+  favorites: FavoritePlayer[];
+  suggestedTeammates: FrequentTeammate[];
+  loadingSuggested: boolean;
+  onRemoveFavorite: (puuid: string) => void;
+  onAddSuggested: (teammate: FrequentTeammate) => void;
 }
 
 function formatNumber(n: number): string {
   return n.toLocaleString("ru-RU");
 }
 
-export function HomeView({ onSearch }: Props) {
+export function HomeView({
+  onSearch,
+  favorites,
+  suggestedTeammates,
+  loadingSuggested,
+  onRemoveFavorite,
+  onAddSuggested,
+}: Props) {
   const [data, setData] = useState<GlobalDashboardData | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -48,6 +61,16 @@ export function HomeView({ onSearch }: Props) {
 
   return (
     <div className="max-w-7xl mx-auto py-6">
+      {/* Favorites & Suggested Teammates */}
+      <FavoritesPanel
+        favorites={favorites}
+        suggestedTeammates={suggestedTeammates}
+        loadingSuggested={loadingSuggested}
+        onPlayerClick={onSearch}
+        onRemoveFavorite={onRemoveFavorite}
+        onAddSuggested={onAddSuggested}
+      />
+
       {/* Top Global Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         {statsCards.map((stat, i) => (

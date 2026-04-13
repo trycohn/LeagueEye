@@ -9,16 +9,18 @@ import { ChampionStats } from "./components/ChampionStats";
 import { PlayerTrends } from "./components/PlayerTrends";
 import { AccountBadge } from "./components/AccountBadge";
 import { LiveGameView } from "./components/LiveGameView";
+import { CompareView } from "./components/CompareView";
 import { useRiotApi } from "./hooks/useRiotApi";
 import { useLiveGame } from "./hooks/useLiveGame";
 import { useOverlayLifecycle } from "./hooks/useOverlayLifecycle";
 import { useUpdater } from "./hooks/useUpdater";
+import { useFavorites } from "./hooks/useFavorites";
 import { HomeView } from "./components/HomeView";
 import { SettingsView } from "./components/SettingsView";
 import { Eye, AlertCircle, Loader2, ChevronLeft, Settings } from "lucide-react";
-import type { DetectedAccount } from "./lib/types";
+import type { DetectedAccount, FrequentTeammate } from "./lib/types";
 
-type View = "home" | "profile" | "live" | "settings";
+type View = "home" | "profile" | "live" | "settings" | "compare";
 type LeagueWindowVisibilityPayload = { visible: boolean };
 
 const POLL_INTERVAL_MS = 4_000;
@@ -54,6 +56,16 @@ export default function App() {
   const { liveData, phase } = useLiveGame(clientOnline);
   const overlayEligible = useOverlayLifecycle(clientOnline);
   const { updateAvailable } = useUpdater();
+  const {
+    favorites,
+    suggestedTeammates,
+    loadingSuggested,
+    addFavorite,
+    removeFavorite,
+    isFavorite,
+    loadSuggestedTeammates,
+  } = useFavorites();
+
   const isLive = phase === "champ_select" || phase === "in_game";
 
   // Автопереключение на live view + отдельная политика видимости оверлея.
@@ -61,6 +73,14 @@ export default function App() {
   const overlayRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const leaveLiveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevPhaseRef = useRef<string>("none");
+
+  // Load suggested teammates when detected account is available
+  useEffect(() => {
+    if (detectedAccount?.puuid) {
+      loadSuggestedTeammates(detectedAccount.puuid);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detectedAccount?.puuid]);
 
   // Сброс истории AI Coach при начале нового матча (none → champ_select)
   useEffect(() => {
@@ -234,6 +254,36 @@ export default function App() {
     setView("home");
   }
 
+  function handleToggleFavorite() {
+    if (!profile) return;
+    if (isFavorite(profile.puuid)) {
+      removeFavorite(profile.puuid);
+    } else {
+      addFavorite(
+        profile.puuid,
+        profile.gameName,
+        profile.tagLine,
+        profile.profileIconId,
+        "manual"
+      );
+    }
+  }
+
+  function handleAddSuggested(teammate: FrequentTeammate) {
+    addFavorite(
+      teammate.puuid,
+      teammate.gameName,
+      teammate.tagLine,
+      0, // profile icon unknown from teammate data
+      "auto"
+    );
+  }
+
+  function handleCompare() {
+    if (!profile) return;
+    setView("compare");
+  }
+
   return (
     <div className="min-h-screen bg-bg-primary">
       <header className="sticky top-0 z-10 bg-bg-primary/80 backdrop-blur-md border-b border-border">
@@ -302,6 +352,11 @@ export default function App() {
           <div className="relative">
             <HomeView
               onSearch={handleSearch}
+              favorites={favorites}
+              suggestedTeammates={suggestedTeammates}
+              loadingSuggested={loadingSuggested}
+              onRemoveFavorite={removeFavorite}
+              onAddSuggested={handleAddSuggested}
             />
           </div>
         )}
@@ -339,7 +394,12 @@ export default function App() {
               Назад
             </button>
 
-            <ProfileCard profile={profile} />
+            <ProfileCard
+              profile={profile}
+              isFavorite={isFavorite(profile.puuid)}
+              onToggleFavorite={handleToggleFavorite}
+              onCompare={handleCompare}
+            />
 
             {loading && (
               <div className="flex items-center gap-2 text-text-muted text-sm">
@@ -374,6 +434,26 @@ export default function App() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* COMPARE VIEW */}
+        {view === "compare" && profile && (
+          <CompareView
+            leftProfile={profile}
+            leftStats={{
+              totalWins,
+              totalLosses,
+              matches: matches.map((m) => ({
+                kills: m.kills,
+                deaths: m.deaths,
+                assists: m.assists,
+                cs: m.cs,
+                gameDuration: m.gameDuration,
+              })),
+            }}
+            favorites={favorites}
+            onBack={() => setView("profile")}
+          />
         )}
       </main>
 

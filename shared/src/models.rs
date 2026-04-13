@@ -437,11 +437,18 @@ pub fn build_champion_stats(matches: &[MatchSummary]) -> Vec<ChampionStat> {
             .or_insert_with(|| StatAccum {
                 champ_id: m.champion_id,
                 champ_name: m.champion_name.clone(),
-                games: 0, wins: 0, kills: 0, deaths: 0, assists: 0, cs: 0,
+                games: 0,
+                wins: 0,
+                kills: 0,
+                deaths: 0,
+                assists: 0,
+                cs: 0,
                 positions: HashMap::new(),
             });
         entry.games += 1;
-        if m.win { entry.wins += 1; }
+        if m.win {
+            entry.wins += 1;
+        }
         entry.kills += m.kills;
         entry.deaths += m.deaths;
         entry.assists += m.assists;
@@ -451,25 +458,30 @@ pub fn build_champion_stats(matches: &[MatchSummary]) -> Vec<ChampionStat> {
         }
     }
 
-    let mut stats: Vec<ChampionStat> = stats_map.into_values().map(|s| {
-        let g = s.games as f64;
-        let top_position = s.positions.iter()
-            .max_by_key(|(_, &cnt)| cnt)
-            .map(|(pos, _)| pos.clone())
-            .unwrap_or_default();
-        ChampionStat {
-            champion_id: s.champ_id,
-            champion_name: s.champ_name,
-            games: s.games,
-            wins: s.wins,
-            winrate: ((s.wins as f64 / g) * 1000.0).round() / 10.0,
-            avg_kills: (s.kills as f64 / g * 10.0).round() / 10.0,
-            avg_deaths: (s.deaths as f64 / g * 10.0).round() / 10.0,
-            avg_assists: (s.assists as f64 / g * 10.0).round() / 10.0,
-            avg_cs: (s.cs as f64 / g * 10.0).round() / 10.0,
-            position: top_position,
-        }
-    }).collect();
+    let mut stats: Vec<ChampionStat> = stats_map
+        .into_values()
+        .map(|s| {
+            let g = s.games as f64;
+            let top_position = s
+                .positions
+                .iter()
+                .max_by_key(|(_, &cnt)| cnt)
+                .map(|(pos, _)| pos.clone())
+                .unwrap_or_default();
+            ChampionStat {
+                champion_id: s.champ_id,
+                champion_name: s.champ_name,
+                games: s.games,
+                wins: s.wins,
+                winrate: ((s.wins as f64 / g) * 1000.0).round() / 10.0,
+                avg_kills: (s.kills as f64 / g * 10.0).round() / 10.0,
+                avg_deaths: (s.deaths as f64 / g * 10.0).round() / 10.0,
+                avg_assists: (s.assists as f64 / g * 10.0).round() / 10.0,
+                avg_cs: (s.cs as f64 / g * 10.0).round() / 10.0,
+                position: top_position,
+            }
+        })
+        .collect();
     stats.sort_by(|a, b| b.games.cmp(&a.games));
     stats
 }
@@ -477,38 +489,46 @@ pub fn build_champion_stats(matches: &[MatchSummary]) -> Vec<ChampionStat> {
 // --- Helper: convert MatchDto to MatchParticipantDetail ---
 
 pub fn dto_to_participants(m: &MatchDto) -> Vec<MatchParticipantDetail> {
-    m.info.participants.iter().map(|p| {
-        let cs = p.total_minions_killed + p.neutral_minions_killed.unwrap_or(0);
-        MatchParticipantDetail {
-            puuid: p.puuid.clone(),
-            riot_id_name: p.riot_id_game_name.clone().unwrap_or_default(),
-            riot_id_tagline: p.riot_id_tagline.clone().unwrap_or_default(),
-            champion_id: p.champion_id,
-            champion_name: p.champion_name.clone(),
-            champ_level: p.champ_level,
-            team_id: p.team_id,
-            win: p.win,
-            kills: p.kills,
-            deaths: p.deaths,
-            assists: p.assists,
-            cs,
-            gold: p.gold_earned,
-            damage: p.total_damage_dealt_to_champions,
-            damage_taken: p.total_damage_taken.unwrap_or(0),
-            vision_score: p.vision_score.unwrap_or(0),
-            wards_placed: p.wards_placed.unwrap_or(0),
-            wards_killed: p.wards_killed.unwrap_or(0),
-            position: p.team_position.clone()
-                .or_else(|| p.individual_position.clone())
-                .unwrap_or_else(|| "UNKNOWN".to_string()),
-            items: vec![p.item0, p.item1, p.item2, p.item3, p.item4, p.item5, p.item6],
-            summoner_spells: vec![p.summoner1_id.unwrap_or(0), p.summoner2_id.unwrap_or(0)],
-            double_kills: p.double_kills.unwrap_or(0),
-            triple_kills: p.triple_kills.unwrap_or(0),
-            quadra_kills: p.quadra_kills.unwrap_or(0),
-            penta_kills: p.penta_kills.unwrap_or(0),
-        }
-    }).collect()
+    m.info
+        .participants
+        .iter()
+        .map(|p| {
+            let cs = p.total_minions_killed + p.neutral_minions_killed.unwrap_or(0);
+            MatchParticipantDetail {
+                puuid: p.puuid.clone(),
+                riot_id_name: p.riot_id_game_name.clone().unwrap_or_default(),
+                riot_id_tagline: p.riot_id_tagline.clone().unwrap_or_default(),
+                champion_id: p.champion_id,
+                champion_name: p.champion_name.clone(),
+                champ_level: p.champ_level,
+                team_id: p.team_id,
+                win: p.win,
+                kills: p.kills,
+                deaths: p.deaths,
+                assists: p.assists,
+                cs,
+                gold: p.gold_earned,
+                damage: p.total_damage_dealt_to_champions,
+                damage_taken: p.total_damage_taken.unwrap_or(0),
+                vision_score: p.vision_score.unwrap_or(0),
+                wards_placed: p.wards_placed.unwrap_or(0),
+                wards_killed: p.wards_killed.unwrap_or(0),
+                position: p
+                    .team_position
+                    .clone()
+                    .or_else(|| p.individual_position.clone())
+                    .unwrap_or_else(|| "UNKNOWN".to_string()),
+                items: vec![
+                    p.item0, p.item1, p.item2, p.item3, p.item4, p.item5, p.item6,
+                ],
+                summoner_spells: vec![p.summoner1_id.unwrap_or(0), p.summoner2_id.unwrap_or(0)],
+                double_kills: p.double_kills.unwrap_or(0),
+                triple_kills: p.triple_kills.unwrap_or(0),
+                quadra_kills: p.quadra_kills.unwrap_or(0),
+                penta_kills: p.penta_kills.unwrap_or(0),
+            }
+        })
+        .collect()
 }
 
 // --- Helper: convert MatchDto to MatchSummary ---
@@ -527,6 +547,32 @@ pub struct MatchupStat {
     pub avg_kills: f64,
     pub avg_deaths: f64,
     pub avg_assists: f64,
+}
+
+// --- Frequent Teammates ---
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FrequentTeammate {
+    pub puuid: String,
+    pub game_name: String,
+    pub tag_line: String,
+    pub games_together: i32,
+    pub wins_together: i32,
+    pub winrate: f64,
+}
+
+// --- Favorite Player (client-local DTO) ---
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FavoritePlayer {
+    pub puuid: String,
+    pub game_name: String,
+    pub tag_line: String,
+    pub profile_icon_id: i64,
+    pub added_at: i64,
+    pub source: String, // "manual" | "auto"
 }
 
 // --- AI Coach DTOs ---
@@ -592,11 +638,10 @@ pub struct CoachingContext {
     pub my_champion_abilities_summary: Option<String>,
     pub my_champion_ally_tips: Option<Vec<String>>,
     // Draft Helper fields
-    pub draft_pick_order: Option<String>,          // "early" | "mid" | "late"
-    pub banned_champions: Vec<String>,             // champion names that are banned
-    pub my_champion_pool: Vec<ChampionPoolEntry>,  // player's champion pool from DB
+    pub draft_pick_order: Option<String>, // "early" | "mid" | "late"
+    pub banned_champions: Vec<String>,    // champion names that are banned
+    pub my_champion_pool: Vec<ChampionPoolEntry>, // player's champion pool from DB
 }
-
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -605,7 +650,11 @@ pub struct CoachStreamPayload {
     pub text: Option<String>,
 }
 
-pub fn dto_to_summary(m: &MatchDto, puuid: &str, lp_delta_fn: impl Fn(&str, i64, i64) -> Option<i32>) -> Option<MatchSummary> {
+pub fn dto_to_summary(
+    m: &MatchDto,
+    puuid: &str,
+    lp_delta_fn: impl Fn(&str, i64, i64) -> Option<i32>,
+) -> Option<MatchSummary> {
     let p = m.info.participants.iter().find(|p| p.puuid == puuid)?;
     let cs = p.total_minions_killed + p.neutral_minions_killed.unwrap_or(0);
     let game_end_ms = m.info.game_creation + m.info.game_duration * 1000;
@@ -622,13 +671,17 @@ pub fn dto_to_summary(m: &MatchDto, puuid: &str, lp_delta_fn: impl Fn(&str, i64,
         gold: p.gold_earned,
         damage: p.total_damage_dealt_to_champions,
         vision_score: p.vision_score.unwrap_or(0),
-        position: p.team_position.clone()
+        position: p
+            .team_position
+            .clone()
             .or_else(|| p.individual_position.clone())
             .unwrap_or_else(|| "UNKNOWN".to_string()),
         game_duration: m.info.game_duration,
         game_creation: m.info.game_creation,
         queue_id: m.info.queue_id,
-        items: vec![p.item0, p.item1, p.item2, p.item3, p.item4, p.item5, p.item6],
+        items: vec![
+            p.item0, p.item1, p.item2, p.item3, p.item4, p.item5, p.item6,
+        ],
         summoner_spells: vec![p.summoner1_id.unwrap_or(0), p.summoner2_id.unwrap_or(0)],
         lp_delta,
     })

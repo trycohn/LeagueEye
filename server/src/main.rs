@@ -116,6 +116,7 @@ async fn main() {
         .route("/api/players/{puuid}/mastery", get(routes::players::get_mastery))
         .route("/api/players/{puuid}/matches", get(routes::players::get_matches_and_stats))
         .route("/api/players/{puuid}/matchups", get(routes::players::get_matchups))
+        .route("/api/players/{puuid}/frequent-teammates", get(routes::players::get_frequent_teammates))
         // Match endpoints
         .route("/api/matches/{match_id}", get(routes::matches::get_match_detail))
         // Live game enrichment

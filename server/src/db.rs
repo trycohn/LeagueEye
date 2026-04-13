@@ -333,6 +333,59 @@ impl Db {
         Ok(stats)
     }
 
+    // --- Frequent Teammates ---
+
+    pub async fn get_frequent_teammates(&self, puuid: &str) -> Result<Vec<FrequentTeammate>, sqlx::Error> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                mp.puuid,
+                mp.riot_id_name,
+                mp.riot_id_tagline,
+                COUNT(*)::INT AS games_together,
+                SUM(CASE WHEN mp.win THEN 1 ELSE 0 END)::INT AS wins_together
+            FROM matches me
+            JOIN match_participants mp
+              ON mp.match_id = me.match_id
+             AND mp.team_id = (
+                 SELECT mp2.team_id FROM match_participants mp2
+                 WHERE mp2.match_id = me.match_id AND mp2.puuid = me.puuid
+                 LIMIT 1
+             )
+             AND mp.puuid <> me.puuid
+            WHERE me.puuid = $1
+            GROUP BY mp.puuid, mp.riot_id_name, mp.riot_id_tagline
+            HAVING COUNT(*) >= 3
+            ORDER BY games_together DESC
+            LIMIT 10
+            "#
+        )
+        .bind(puuid)
+        .fetch_all(&self.pool)
+        .await?;
+
+        use sqlx::Row;
+        let teammates = rows.into_iter().map(|r| {
+            let games: i32 = r.try_get("games_together").unwrap_or(0);
+            let wins: i32 = r.try_get("wins_together").unwrap_or(0);
+            let winrate = if games > 0 {
+                ((wins as f64 / games as f64) * 1000.0).round() / 10.0
+            } else {
+                0.0
+            };
+            FrequentTeammate {
+                puuid: r.try_get::<String, _>("puuid").unwrap_or_default(),
+                game_name: r.try_get::<Option<String>, _>("riot_id_name").unwrap_or_default().unwrap_or_default(),
+                tag_line: r.try_get::<Option<String>, _>("riot_id_tagline").unwrap_or_default().unwrap_or_default(),
+                games_together: games,
+                wins_together: wins,
+                winrate,
+            }
+        }).collect();
+
+        Ok(teammates)
+    }
+
     pub async fn get_global_dashboard_data(&self) -> Result<GlobalDashboardData, sqlx::Error> {
         // 1. Global Stats
         let total_players: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM accounts")

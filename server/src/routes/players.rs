@@ -204,3 +204,13 @@ pub async fn get_matches_and_stats(
         total_losses,
     }))
 }
+
+// GET /api/players/{puuid}/frequent-teammates
+pub async fn get_frequent_teammates(
+    State(state): State<Arc<AppState>>,
+    Path(puuid): Path<String>,
+) -> Result<Json<Vec<FrequentTeammate>>, String> {
+    let teammates = state.db.get_frequent_teammates(&puuid).await
+        .map_err(|e| format!("DB error: {}", e))?;
+    Ok(Json(teammates))
+}

@@ -96,6 +96,10 @@ impl ServerApiClient {
         self.get(&format!("/api/players/{}/matchups", puuid)).await
     }
 
+    pub async fn get_frequent_teammates(&self, puuid: &str) -> Result<Vec<FrequentTeammate>, String> {
+        self.get(&format!("/api/players/{}/frequent-teammates", puuid)).await
+    }
+
     pub async fn load_more_matches(&self, puuid: &str, offset: usize, limit: usize) -> Result<Vec<MatchSummary>, String> {
         let result: MatchesAndStats = self.get(&format!(
             "/api/players/{}/matches?offset={}&limit={}", puuid, offset, limit
