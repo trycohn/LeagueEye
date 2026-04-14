@@ -84,7 +84,6 @@ pub struct ChampSelectSession {
 pub struct ChampSelectPlayer {
     pub cell_id: Option<i32>,
     pub champion_id: Option<i64>,
-    pub summoner_id: Option<i64>,
     pub puuid: Option<String>,
     pub assigned_position: Option<String>,
     pub spell1_id: Option<i32>,

@@ -292,7 +292,6 @@ pub async fn get_live_game(
                         spell2_id: p.spell2_id.unwrap_or(0),
                         team_id: 100,
                         is_picking: p.cell_id.map(|c| picking_cells.contains(&c)).unwrap_or(false),
-                        summoner_id: p.summoner_id,
                     });
                 }
             }
@@ -308,7 +307,6 @@ pub async fn get_live_game(
                         spell2_id: p.spell2_id.unwrap_or(0),
                         team_id: 200,
                         is_picking: p.cell_id.map(|c| picking_cells.contains(&c)).unwrap_or(false),
-                        summoner_id: p.summoner_id,
                     });
                 }
             }
@@ -481,7 +479,6 @@ pub async fn get_live_game(
                     spell2_id: 0,
                     team_id: if is_my_team { 100 } else { 200 },
                     is_picking: false,
-                    summoner_id: None,
                 });
             }
         }
@@ -635,7 +632,6 @@ pub async fn request_coaching(
                 spell2_id: p.spell2_id,
                 team_id: p.team_id,
                 is_picking: p.is_picking,
-                summoner_id: None,
             })
             .collect();
 
@@ -810,7 +806,6 @@ pub async fn request_draft_advice(
             spell2_id: p.spell2_id,
             team_id: p.team_id,
             is_picking: p.is_picking,
-            summoner_id: None,
         })
         .collect();
 

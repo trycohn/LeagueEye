@@ -183,13 +183,16 @@ impl RiotApiClient {
         self.get(&url).await
     }
 
-    pub async fn get_active_game(&self, puuid: &str) -> Result<SpectatorGame, String> {
+    pub async fn get_active_game(&self, puuid: &str) -> Result<Option<SpectatorGame>, String> {
         let summoner = self.get_summoner_by_puuid(puuid).await?;
-        let summoner_id = summoner
+        let Some(summoner_id) = summoner
             .id
-            .ok_or_else(|| "Не удалось получить summonerId для Spectator API".to_string())?;
+            .filter(|id| !id.is_empty())
+        else {
+            return Ok(None);
+        };
         let url = format!("{}/lol/spectator/v5/active-games/by-summoner/{}", PLATFORM_URL, summoner_id);
-        self.get(&url).await
+        self.get(&url).await.map(Some)
     }
 
     pub async fn get_matches_parallel(&self, match_ids: &[String], batch_size: usize) -> Vec<MatchDto> {
@@ -227,13 +230,16 @@ impl RiotApiClient {
         self.get_raw(&url).await
     }
 
-    pub async fn get_active_game_fast(&self, puuid: &str) -> Result<SpectatorGame, String> {
+    pub async fn get_active_game_fast(&self, puuid: &str) -> Result<Option<SpectatorGame>, String> {
         let url_summoner = format!("{}/lol/summoner/v4/summoners/by-puuid/{}", PLATFORM_URL, puuid);
         let summoner: Summoner = self.get_raw(&url_summoner).await?;
-        let summoner_id = summoner
+        let Some(summoner_id) = summoner
             .id
-            .ok_or_else(|| "Не удалось получить summonerId для Spectator API".to_string())?;
+            .filter(|id| !id.is_empty())
+        else {
+            return Ok(None);
+        };
         let url = format!("{}/lol/spectator/v5/active-games/by-summoner/{}", PLATFORM_URL, summoner_id);
-        self.get_raw(&url).await
+        self.get_raw(&url).await.map(Some)
     }
 }

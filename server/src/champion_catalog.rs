@@ -372,15 +372,18 @@ fn strip_html_tags(s: &str) -> String {
 }
 
 fn truncate_desc(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
+    if s.chars().count() <= max_len {
         return s.to_string();
     }
+
+    let prefix: String = s.chars().take(max_len).collect();
+
     // Try to cut at sentence boundary
-    let end = s[..max_len]
+    let end = prefix
         .rfind(". ")
         .map(|pos| pos + 1)
-        .unwrap_or(max_len);
-    s[..end].to_string()
+        .unwrap_or(prefix.len());
+    prefix[..end].to_string()
 }
 
 /// Format resource for display in catalog
@@ -453,7 +456,21 @@ mod tests {
     fn truncate_desc_cuts_at_max_len_if_no_sentence() {
         let long = "A very long description without any period boundaries that just keeps going and going forever";
         let result = truncate_desc(long, 30);
-        assert_eq!(result.len(), 30);
+        assert_eq!(result.chars().count(), 30);
+    }
+
+    #[test]
+    fn truncate_desc_handles_cyrillic_utf8_boundary() {
+        let long = format!("{}{}{}",
+            "н ".repeat(39),
+            "abн",
+            "a".repeat(40)
+        );
+
+        let result = truncate_desc(&long, 120);
+
+        assert_eq!(result.chars().count(), 120);
+        assert_eq!(result, format!("{}{}{}", "н ".repeat(39), "abн", "a".repeat(39)));
     }
 
     #[test]

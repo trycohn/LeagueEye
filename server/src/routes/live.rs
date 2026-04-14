@@ -30,7 +30,6 @@ pub struct EnrichPlayer {
     pub spell2_id: i32,
     pub team_id: i32,
     pub is_picking: bool,
-    pub summoner_id: Option<i64>,
 }
 
 fn parse_riot_id(riot_id: &str) -> Option<(&str, &str)> {
@@ -89,7 +88,6 @@ fn find_matching_player_index(
 
 fn hydrate_player_from_spectator(
     players: &mut [LivePlayer],
-    summoner_ids: &mut [Option<i64>],
     spec_p: &SpectatorParticipant,
 ) -> Result<(), &'static str> {
     let idx = find_matching_player_index(players, spec_p)?;
@@ -104,12 +102,41 @@ fn hydrate_player_from_spectator(
         player.tag_line = Some(tag_line.to_string());
     }
 
-    // Hydrate summoner_id from Spectator API (String → i64) for rank fallback
-    if summoner_ids[idx].is_none() {
-        if let Some(ref sid_str) = spec_p.summoner_id {
-            if let Ok(sid) = sid_str.parse::<i64>() {
-                summoner_ids[idx] = Some(sid);
-            }
+    Ok(())
+}
+
+fn maybe_hydrate_teams_from_spectator(
+    my_puuid: &str,
+    my_team: &mut [LivePlayer],
+    enemy_team: &mut [LivePlayer],
+    spec_game: Option<&SpectatorGame>,
+) -> Result<(), &'static str> {
+    let Some(spec_game) = spec_game else {
+        return Ok(());
+    };
+
+    let my_spec_team_id = spec_game
+        .participants
+        .iter()
+        .find(|participant| participant.puuid.as_deref() == Some(my_puuid))
+        .map(|participant| participant.team_id)
+        .ok_or("spectator game missing my puuid")?;
+
+    for spec_p in &spec_game.participants {
+        let relative_team_id = relative_team_id_from_spectator(spec_p.team_id, my_spec_team_id);
+        let result = if relative_team_id == 100 {
+            hydrate_player_from_spectator(my_team, spec_p)
+        } else {
+            hydrate_player_from_spectator(enemy_team, spec_p)
+        };
+
+        if let Err(reason) = result {
+            log::warn!(
+                "[live] Spectator hydration skipped for team {} champion {}: {}",
+                relative_team_id,
+                spec_p.champion_id,
+                reason
+            );
         }
     }
 
@@ -123,10 +150,6 @@ pub async fn enrich_live_game(
 ) -> Result<Json<LiveGameData>, String> {
     let mut my_team: Vec<LivePlayer> = Vec::new();
     let mut enemy_team: Vec<LivePlayer> = Vec::new();
-    // Keep summoner_ids separate — they're only needed for rank fallback,
-    // not part of the shared LivePlayer DTO sent to the frontend.
-    let mut my_team_summoner_ids: Vec<Option<i64>> = Vec::new();
-    let mut enemy_team_summoner_ids: Vec<Option<i64>> = Vec::new();
 
     // Determine my team ID
     let my_team_id = req.my_puuid.as_ref()
@@ -149,10 +172,8 @@ pub async fn enrich_live_game(
         };
         if p.team_id == my_team_id {
             my_team.push(player);
-            my_team_summoner_ids.push(p.summoner_id);
         } else {
             enemy_team.push(player);
-            enemy_team_summoner_ids.push(p.summoner_id);
         }
     }
 
@@ -163,31 +184,18 @@ pub async fn enrich_live_game(
         if let Some(ref my_puuid) = req.my_puuid {
             match state.riot_api.get_active_game_fast(my_puuid).await {
                 Ok(spec_game) => {
-                    let my_spec_team_id = spec_game.participants.iter()
-                        .find(|participant| participant.puuid.as_deref() == Some(my_puuid))
-                        .map(|participant| participant.team_id);
-
-                    if let Some(my_spec_team_id) = my_spec_team_id {
-                        for spec_p in &spec_game.participants {
-                            let relative_team_id =
-                                relative_team_id_from_spectator(spec_p.team_id, my_spec_team_id);
-                            let (target_team, target_sids) = if relative_team_id == 100 {
-                                (&mut my_team, &mut my_team_summoner_ids)
-                            } else {
-                                (&mut enemy_team, &mut enemy_team_summoner_ids)
-                            };
-
-                            if let Err(reason) = hydrate_player_from_spectator(target_team, target_sids, spec_p) {
-                                log::warn!(
-                                    "[live] Spectator hydration skipped for team {} champion {}: {}",
-                                    relative_team_id,
-                                    spec_p.champion_id,
-                                    reason
-                                );
-                            }
-                        }
-                    } else {
-                        log::warn!("[live] Spectator game did not include my puuid, skipping hydration");
+                    if spec_game.is_none() {
+                        log::debug!(
+                            "[live] Spectator skipped: Riot API did not return summonerId for this puuid"
+                        );
+                    }
+                    if let Err(reason) = maybe_hydrate_teams_from_spectator(
+                        my_puuid,
+                        &mut my_team,
+                        &mut enemy_team,
+                        spec_game.as_ref(),
+                    ) {
+                        log::warn!("[live] Spectator hydration skipped: {}", reason);
                     }
                 }
                 Err(err) => {
@@ -261,23 +269,16 @@ pub async fn enrich_live_game(
         }
     }
 
-    // Enrich all players with rank data (with cache).
-    // Primary: by puuid (cached). Fallback: by summoner_id (from champ select LCU data or Spectator).
-    let all_summoner_ids: Vec<Option<i64>> = my_team_summoner_ids.iter()
-        .chain(enemy_team_summoner_ids.iter())
-        .cloned()
-        .collect();
-
+    // Enrich all players with rank data (cache + Riot league-v4 by puuid).
     let all_puuids: Vec<Option<String>> = my_team.iter()
         .chain(enemy_team.iter())
         .map(|p| p.puuid.clone())
         .collect();
 
-    let rank_futs: Vec<_> = all_puuids.iter().zip(all_summoner_ids.iter())
-        .map(|(puuid_opt, sid_opt)| {
+    let rank_futs: Vec<_> = all_puuids.iter()
+        .map(|puuid_opt| {
             let state = state.clone();
             let puuid_opt = puuid_opt.clone();
-            let sid_opt = *sid_opt;
             async move {
                 // 1. Try rank cache by puuid
                 if let Some(ref puuid) = puuid_opt {
@@ -299,27 +300,6 @@ pub async fn enrich_live_game(
 
                         // Store in cache
                         {
-                            let mut cache = state.rank_cache.lock().await;
-                            cache.insert(puuid.clone(), CachedRank {
-                                rank: rank.clone(),
-                                fetched_at: std::time::Instant::now(),
-                            });
-                        }
-                        return rank;
-                    }
-                }
-
-                // 2. Fallback: try by summoner_id
-                if let Some(sid) = sid_opt {
-                    let sid_str = sid.to_string();
-                    if let Ok(entries) = state.riot_api.get_league_entries_fast(&sid_str).await {
-                        let ri = build_rank_info(entries);
-                        let rank = ri.iter().find(|r| r.queue_type == "RANKED_SOLO_5x5")
-                            .or(ri.first())
-                            .cloned();
-
-                        // If we also have a puuid, cache the result for future lookups
-                        if let Some(ref puuid) = puuid_opt {
                             let mut cache = state.rank_cache.lock().await;
                             cache.insert(puuid.clone(), CachedRank {
                                 rank: rank.clone(),
@@ -410,10 +390,8 @@ mod tests {
             live_player(100, 157, None, Some("Tryconn"), None),
             live_player(100, 157, None, None, None),
         ];
-        let mut sids = vec![None, None];
-
         let participant = spectator_player(200, 157, Some("ally-puuid"), Some("Tryconn#EUW"));
-        hydrate_player_from_spectator(&mut players, &mut sids, &participant).unwrap();
+        hydrate_player_from_spectator(&mut players, &participant).unwrap();
 
         assert_eq!(players[0].puuid.as_deref(), Some("ally-puuid"));
         assert_eq!(players[0].game_name.as_deref(), Some("Tryconn"));
@@ -427,12 +405,56 @@ mod tests {
             live_player(200, 238, None, None, None),
             live_player(200, 238, None, None, None),
         ];
-        let mut sids = vec![None, None];
-
         let participant = spectator_player(100, 238, Some("enemy-puuid"), None);
-        let err = hydrate_player_from_spectator(&mut players, &mut sids, &participant).unwrap_err();
+        let err = hydrate_player_from_spectator(&mut players, &participant).unwrap_err();
 
         assert_eq!(err, "multiple champion matches");
         assert!(players.iter().all(|player| player.puuid.is_none()));
+    }
+
+    fn spectator_game(participants: Vec<SpectatorParticipant>) -> SpectatorGame {
+        SpectatorGame {
+            game_id: 1,
+            game_mode: "CLASSIC".to_string(),
+            game_type: Some("MATCHED_GAME".to_string()),
+            game_queue_config_id: Some(420),
+            participants,
+            banned_champions: None,
+            game_start_time: Some(0),
+            game_length: Some(0),
+        }
+    }
+
+    #[test]
+    fn maybe_hydrate_teams_from_spectator_is_noop_without_game() {
+        let mut my_team = vec![live_player(100, 157, Some("me"), Some("Tryconn"), Some("EUW"))];
+        let mut enemy_team = vec![live_player(200, 238, None, Some("Enemy"), Some("EUW"))];
+        let my_before = my_team[0].clone();
+        let enemy_before = enemy_team[0].clone();
+
+        maybe_hydrate_teams_from_spectator("me", &mut my_team, &mut enemy_team, None).unwrap();
+
+        assert_eq!(my_team[0].puuid, my_before.puuid);
+        assert_eq!(my_team[0].game_name, my_before.game_name);
+        assert_eq!(my_team[0].tag_line, my_before.tag_line);
+        assert_eq!(enemy_team[0].puuid, enemy_before.puuid);
+        assert_eq!(enemy_team[0].game_name, enemy_before.game_name);
+        assert_eq!(enemy_team[0].tag_line, enemy_before.tag_line);
+    }
+
+    #[test]
+    fn maybe_hydrate_teams_from_spectator_updates_both_teams() {
+        let mut my_team = vec![live_player(100, 157, Some("me"), Some("Tryconn"), Some("EUW"))];
+        let mut enemy_team = vec![live_player(200, 238, None, None, None)];
+        let spec_game = spectator_game(vec![
+            spectator_player(200, 157, Some("me"), Some("Tryconn#EUW")),
+            spectator_player(100, 238, Some("enemy-puuid"), Some("Enemy#EUW")),
+        ]);
+
+        maybe_hydrate_teams_from_spectator("me", &mut my_team, &mut enemy_team, Some(&spec_game)).unwrap();
+
+        assert_eq!(enemy_team[0].puuid.as_deref(), Some("enemy-puuid"));
+        assert_eq!(enemy_team[0].game_name.as_deref(), Some("Enemy"));
+        assert_eq!(enemy_team[0].tag_line.as_deref(), Some("EUW"));
     }
 }

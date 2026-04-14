@@ -37,7 +37,7 @@ version = "0.3.0"
 ### 2. Собрать с подписью (Windows, PowerShell)
 
 ```powershell
-$env:TAURI_SIGNING_PRIVATE_KEY_PATH = "C:\Users\home\Documents\LeagueEye\~\.tauri\leagueeye.key"
+$env:TAURI_SIGNING_PRIVATE_KEY = "C:\Users\1337\.tauri\leagueeye.key"
 npm run tauri build
 ```
 
