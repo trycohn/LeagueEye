@@ -162,7 +162,8 @@ async fn hide_overlay(app: tauri::AppHandle) -> Result<(), String> {
 
 fn get_saved_overlay_position(app: &tauri::AppHandle, overlay_id: &str) -> Option<(i32, i32)> {
     let db: tauri::State<SharedDb> = app.state();
-    db.lock().ok()?.get_overlay_position(overlay_id).ok().flatten()
+    let position = db.lock().ok()?.get_overlay_position(overlay_id).ok().flatten();
+    position
 }
 
 #[tauri::command]
