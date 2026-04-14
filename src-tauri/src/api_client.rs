@@ -22,6 +22,8 @@ impl ServerApiClient {
     pub fn new(base_url: String) -> Self {
         let client = Client::builder()
             .danger_accept_invalid_certs(base_url.starts_with("https://"))
+            .timeout(std::time::Duration::from_secs(10))
+            .pool_idle_timeout(std::time::Duration::from_secs(30))
             .build()
             .unwrap_or_default();
         Self {

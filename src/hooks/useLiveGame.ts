@@ -5,6 +5,16 @@ import type { LiveGameData } from "../lib/types";
 const CHAMP_SELECT_INTERVAL = 2_000;
 const IN_GAME_INTERVAL = 5_000;
 const IDLE_INTERVAL = 3_000;
+const POLL_TIMEOUT = 8_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("poll timeout")), ms)
+    ),
+  ]);
+}
 
 export function useLiveGame(enabled: boolean) {
   const [liveData, setLiveData] = useState<LiveGameData | null>(null);
@@ -30,7 +40,10 @@ export function useLiveGame(enabled: boolean) {
         setLoading(true);
       }
 
-      const data = await invoke<LiveGameData>("get_live_game");
+      const data = await withTimeout(
+        invoke<LiveGameData>("get_live_game"),
+        POLL_TIMEOUT
+      );
 
       if (
         mountedRef.current &&

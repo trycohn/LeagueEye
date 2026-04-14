@@ -417,6 +417,17 @@ pub async fn get_live_game(
                 log::warn!("[perf] get_live_game (champ_select) total: {:?}", cmd_elapsed);
             }
             return Ok(result);
+        } else {
+            log::warn!("[live] get_champ_select failed, returning degraded champ_select phase");
+            return Ok(LiveGameData {
+                phase: "champ_select".to_string(),
+                queue_id: None,
+                my_team: vec![],
+                enemy_team: vec![],
+                bans: vec![],
+                game_time: None,
+                timer: None,
+            });
         }
     }
 
@@ -512,7 +523,20 @@ pub async fn get_live_game(
         }
     }
 
-    Ok(none_result)
+    // Preserve the phase even when enrichment and cache both fail.
+    // Returning "none" here would hide the live view from the frontend,
+    // even though we KNOW we're in-game from the gameflow phase.
+    log::warn!("[live] No enriched data and no cache, returning degraded in_game phase");
+    Ok(LiveGameData {
+        phase: "in_game".to_string(),
+        queue_id: None,
+        my_team: vec![],
+        enemy_team: vec![],
+        bans: vec![],
+        game_time: alldata.as_ref()
+            .and_then(|d| d.game_data.as_ref().and_then(|g| g.game_time.map(|t| t as i64))),
+        timer: None,
+    })
 }
 
 // ─── compat commands (deprecated stubs) ──────────────────────────────────────

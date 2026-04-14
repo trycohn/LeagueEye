@@ -1,6 +1,6 @@
 [package]
 name = "league-eye"
-version = "0.3.2"
+version = "0.3.4"
 description = "LeagueEye - League of Legends stats analyzer"
 authors = ["you"]
 license = ""

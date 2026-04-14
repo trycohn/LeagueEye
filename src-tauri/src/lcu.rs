@@ -312,12 +312,18 @@ fn find_league_dir_from_process() -> Option<PathBuf> {
 
 /// Lazy-initialized async reqwest client with TLS verification disabled
 /// (LCU uses a self-signed certificate on 127.0.0.1).
+/// HTTP/1.1 only + aggressive pool settings to avoid stale connection issues
+/// when LCU restarts and changes port/TLS cert.
 fn lcu_async_http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .danger_accept_invalid_certs(true)
             .timeout(Duration::from_secs(5))
+            .http1_only()
+            .pool_idle_timeout(Duration::from_secs(10))
+            .pool_max_idle_per_host(1)
+            .tcp_keepalive(Duration::from_secs(5))
             .build()
             .expect("Failed to create LCU HTTP client")
     })
@@ -504,12 +510,18 @@ pub struct LiveClientPlayer {
 
 /// Lazy-initialized async reqwest client for the Live Client Data API (localhost:2999).
 /// Also uses a self-signed certificate.
+/// HTTP/1.1 only + aggressive pool settings to avoid stale connections
+/// when the game client restarts between sessions.
 fn live_client_async_http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .danger_accept_invalid_certs(true)
             .timeout(Duration::from_secs(2))
+            .http1_only()
+            .pool_idle_timeout(Duration::from_secs(10))
+            .pool_max_idle_per_host(1)
+            .tcp_keepalive(Duration::from_secs(5))
             .build()
             .expect("Failed to create Live Client HTTP client")
     })
