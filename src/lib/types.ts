@@ -210,6 +210,12 @@ export interface GoldComparisonData {
   gameTime: number | null;
 }
 
+export interface CounterItemSuggestion {
+  itemId: number;
+  name: string;
+  reason: string;
+}
+
 export interface LaneGoldComparison {
   role: string;
   allyChampionName: string;
@@ -217,6 +223,7 @@ export interface LaneGoldComparison {
   enemyChampionName: string;
   enemyGold: number;
   goldDiff: number;
+  counterItem: CounterItemSuggestion | null;
 }
 
 // --- Matchup Stats ---

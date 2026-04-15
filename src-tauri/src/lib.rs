@@ -2,6 +2,7 @@ mod ai_coach;
 mod api_client;
 mod commands;
 mod db;
+mod gold_counter;
 mod league_window;
 mod lcu;
 mod models;
@@ -9,8 +10,9 @@ mod overlay_policy;
 
 use ai_coach::CoachState;
 use api_client::ServerApiClient;
-use commands::{ChampionNamesCache, ItemCostCache, LastLiveState};
+use commands::{ChampionNamesCache, LastLiveState};
 use db::Db;
+use gold_counter::ItemCatalogCache;
 use std::sync::{Arc, Mutex};
 use tauri::{
     Manager, WebviewUrl, WebviewWindowBuilder,
@@ -422,7 +424,7 @@ pub fn run() {
         .manage(client)
         .manage(Arc::new(Mutex::new(CoachState::new())))
         .manage(Arc::new(Mutex::new(ChampionNamesCache::new())))
-        .manage(Arc::new(Mutex::new(ItemCostCache::new())))
+        .manage(Arc::new(Mutex::new(ItemCatalogCache::new())))
         .manage(Arc::new(Mutex::new(LastLiveState::new())))
         .setup(|app| {
             {

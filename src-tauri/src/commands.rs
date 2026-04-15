@@ -5,6 +5,9 @@ use tauri::State;
 use crate::ai_coach::{self, CoachState, ChampionMetaInfo, ChampionAbility};
 use crate::api_client::{ServerApiClient, EnrichLiveRequest, EnrichLivePlayer};
 use crate::db::Db;
+use crate::gold_counter::{
+    CounterItemSuggestion, ItemCatalogCache, get_or_fetch_item_catalog, recommend_counter_item,
+};
 use crate::lcu;
 use crate::models::*;
 
@@ -29,19 +32,6 @@ impl ChampionNamesCache {
             champion_meta: HashMap::new(),
             loaded: false,
         }
-    }
-}
-
-// ─── ItemCostCache (золото предметов из DDragon) ───────────────────────────
-
-pub struct ItemCostCache {
-    pub item_costs: HashMap<i32, i32>,
-    pub loaded: bool,
-}
-
-impl ItemCostCache {
-    pub fn new() -> Self {
-        Self { item_costs: HashMap::new(), loaded: false }
     }
 }
 
@@ -1138,49 +1128,6 @@ fn truncate_desc(s: &str, max_len: usize) -> String {
     }
 }
 
-// ─── item cost cache ────────────────────────────────────────────────────────
-
-async fn get_or_fetch_item_costs(
-    cache: &Arc<Mutex<ItemCostCache>>,
-) -> HashMap<i32, i32> {
-    {
-        let c = cache.lock().unwrap();
-        if c.loaded { return c.item_costs.clone(); }
-    }
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .unwrap_or_default();
-
-    let url = "https://ddragon.leagueoflegends.com/cdn/16.7.1/data/en_US/item.json";
-    let mut costs: HashMap<i32, i32> = HashMap::new();
-
-    if let Ok(resp) = client.get(url).send().await {
-        if let Ok(json) = resp.json::<serde_json::Value>().await {
-            if let Some(data) = json.get("data").and_then(|d| d.as_object()) {
-                for (id_str, info) in data {
-                    if let Ok(id) = id_str.parse::<i32>() {
-                        if let Some(total) = info.pointer("/gold/total").and_then(|v| v.as_i64()) {
-                            costs.insert(id, total as i32);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    log::info!("[item_cache] Loaded {} item costs", costs.len());
-
-    if !costs.is_empty() {
-        let mut c = cache.lock().unwrap();
-        c.item_costs = costs.clone();
-        c.loaded = true;
-    }
-
-    costs
-}
-
 // ─── get_gold_comparison ────────────────────────────────────────────────────
 
 #[derive(serde::Serialize)]
@@ -1199,11 +1146,12 @@ pub struct LaneGoldComparison {
     pub enemy_champion_name: String,
     pub enemy_gold: i32,
     pub gold_diff: i32,               // positive = ally ahead
+    pub counter_item: Option<CounterItemSuggestion>,
 }
 
 #[tauri::command]
 pub async fn get_gold_comparison(
-    item_cache: State<'_, Arc<Mutex<ItemCostCache>>>,
+    item_cache: State<'_, Arc<Mutex<ItemCatalogCache>>>,
     champ_cache: State<'_, Arc<Mutex<ChampionNamesCache>>>,
 ) -> Result<GoldComparisonData, String> {
     let alldata = lcu::get_live_client_allgamedata().await
@@ -1221,23 +1169,33 @@ pub async fn get_gold_comparison(
     let identity = lcu::get_lcu_identity(&creds).await
         .map_err(|e| format!("Не удалось определить игрока: {}", e))?;
 
-    let my_team_str = players.iter()
+    let me_player = players.iter()
         .find(|p| {
             p.riot_id_game_name.as_deref() == Some(&identity.game_name)
                 || p.summoner_name.as_deref() == Some(&identity.game_name)
-        })
+        });
+
+    let my_team_str = me_player
         .and_then(|p| p.team.clone())
         .unwrap_or_else(|| "ORDER".to_string());
 
-    let item_costs = get_or_fetch_item_costs(&item_cache).await;
-    let (id_to_name, name_to_id, _meta) = get_or_fetch_champion_names(&champ_cache).await;
+    let item_catalog = get_or_fetch_item_catalog(&item_cache).await;
+    let (id_to_name, name_to_id, _) = get_or_fetch_champion_names(&champ_cache).await;
+    let all_champ_names: Vec<String> = players
+        .iter()
+        .filter_map(|player| player.champion_name.clone())
+        .collect();
+    let champ_meta = ensure_champion_meta(&champ_cache, &all_champ_names).await;
+    let my_meta = me_player
+        .and_then(|player| player.champion_name.as_ref())
+        .and_then(|champion_name| champ_meta.get(champion_name));
 
     let calc_gold = |p: &lcu::LiveFullPlayer| -> i32 {
         p.items.as_ref().map(|items| {
             items.iter().map(|item| {
                 let id = item.item_id.unwrap_or(0);
                 let count = item.count.unwrap_or(1).max(1);
-                item_costs.get(&id).copied().unwrap_or(0) * count
+                item_catalog.item_costs.get(&id).copied().unwrap_or(0) * count
             }).sum()
         }).unwrap_or(0)
     };
@@ -1283,6 +1241,20 @@ pub async fn get_gold_comparison(
                 enemy_champion_name: resolve_champ_name(&enemy_champ),
                 enemy_gold: *enemy_gold,
                 gold_diff: ally_gold - enemy_gold,
+                counter_item: me_player.and_then(|my_player| {
+                    let enemy_meta = enemy
+                        .champion_name
+                        .as_ref()
+                        .and_then(|champion_name| champ_meta.get(champion_name));
+                    recommend_counter_item(
+                        &item_catalog,
+                        my_player,
+                        my_meta,
+                        enemy,
+                        enemy_meta,
+                        game_time,
+                    )
+                }),
             });
         }
     }

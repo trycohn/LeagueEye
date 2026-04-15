@@ -190,6 +190,7 @@ fn build_catalog(en_json: serde_json::Value, ru_json: Option<serde_json::Value>)
 /// - maps["11"] == true (Summoner's Rift)
 /// - gold.purchasable == true
 /// - `into` is empty or absent (no further upgrades)
+/// - `from` is present and non-empty (normal build path from components)
 /// - gold.total > 0 (exclude free trinkets)
 /// - No "Consumable" or "Trinket" tag
 fn is_final_item(info: &serde_json::Value) -> bool {
@@ -217,6 +218,15 @@ fn is_final_item(info: &serde_json::Value) -> bool {
         Some(arr) => arr.as_array().map(|a| a.is_empty()).unwrap_or(true),
     };
     if !into_empty {
+        return false;
+    }
+
+    let has_recipe = info
+        .get("from")
+        .and_then(|from| from.as_array())
+        .map(|arr| !arr.is_empty())
+        .unwrap_or(false);
+    if !has_recipe {
         return false;
     }
 
@@ -256,6 +266,7 @@ mod tests {
         gold_total: i64,
         purchasable: bool,
         on_sr: bool,
+        from: Option<Vec<&str>>,
         into: Option<Vec<&str>>,
         tags: Vec<&str>,
     ) -> (String, serde_json::Value) {
@@ -276,6 +287,12 @@ mod tests {
             item.as_object_mut()
                 .unwrap()
                 .insert("into".to_string(), serde_json::json!(items));
+        }
+
+        if let Some(items) = from {
+            item.as_object_mut()
+                .unwrap()
+                .insert("from".to_string(), serde_json::json!(items));
         }
 
         (id.to_string(), item)
@@ -305,6 +322,7 @@ mod tests {
             3400,
             true,  // purchasable
             true,  // on SR
+            Some(vec!["1038", "1018"]),
             Some(vec![]), // empty into = final
             vec!["Damage", "CriticalStrike"],
         );
@@ -319,6 +337,7 @@ mod tests {
             1300,
             true,
             true,
+            Some(vec!["1036"]),
             Some(vec!["3031", "3072"]), // builds into other items
             vec!["Damage"],
         );
@@ -333,6 +352,7 @@ mod tests {
             3400,
             true,
             true,
+            Some(vec!["1038", "1018"]),
             None, // no `into` field at all
             vec!["Damage", "CriticalStrike"],
         );
@@ -348,6 +368,7 @@ mod tests {
             true,
             true,
             Some(vec![]),
+            Some(vec![]),
             vec!["Trinket"],
         );
         assert!(!is_final_item(&item)); // gold == 0 AND trinket tag
@@ -362,6 +383,7 @@ mod tests {
             true,
             true,
             Some(vec![]),
+            Some(vec![]),
             vec!["Consumable"],
         );
         assert!(!is_final_item(&item));
@@ -375,6 +397,7 @@ mod tests {
             0,
             true,
             true,
+            Some(vec!["1036"]),
             Some(vec![]),
             vec!["Damage"],
         );
@@ -389,6 +412,7 @@ mod tests {
             3000,
             true,
             false, // not on SR
+            Some(vec!["1036"]),
             Some(vec![]),
             vec!["Damage"],
         );
@@ -403,6 +427,7 @@ mod tests {
             0,
             false, // not purchasable
             true,
+            Some(vec!["1036"]),
             Some(vec![]),
             vec!["Damage"],
         );
@@ -410,13 +435,28 @@ mod tests {
     }
 
     #[test]
+    fn item_without_recipe_filtered_out() {
+        let (_, item) = make_item(
+            "663039",
+            "Atma's Reckoning",
+            3000,
+            true,
+            true,
+            Some(vec![]),
+            Some(vec![]),
+            vec!["Health", "CriticalStrike", "Lane"],
+        );
+        assert!(!is_final_item(&item));
+    }
+
+    #[test]
     fn build_catalog_creates_correct_mappings() {
         let en_json = build_test_en_json(vec![
-            make_item("3031", "Infinity Edge", 3400, true, true, Some(vec![]), vec!["Damage", "CriticalStrike"]),
-            make_item("1026", "B. F. Sword", 1300, true, true, Some(vec!["3031"]), vec!["Damage"]),
-            make_item("3340", "Stealth Ward", 0, true, true, Some(vec![]), vec!["Trinket"]),
-            make_item("2003", "Health Potion", 50, true, true, Some(vec![]), vec!["Consumable"]),
-            make_item("2900", "Spirit Visage", 2900, true, true, None, vec!["Health", "SpellBlock"]),
+            make_item("3031", "Infinity Edge", 3400, true, true, Some(vec!["1038", "1018"]), Some(vec![]), vec!["Damage", "CriticalStrike"]),
+            make_item("1026", "B. F. Sword", 1300, true, true, Some(vec!["1036"]), Some(vec!["3031"]), vec!["Damage"]),
+            make_item("3340", "Stealth Ward", 0, true, true, Some(vec![]), Some(vec![]), vec!["Trinket"]),
+            make_item("2003", "Health Potion", 50, true, true, Some(vec![]), Some(vec![]), vec!["Consumable"]),
+            make_item("2900", "Spirit Visage", 2900, true, true, Some(vec!["1057", "3211"]), None, vec!["Health", "SpellBlock"]),
         ]);
 
         let ru_json = build_test_ru_json(vec![
@@ -452,7 +492,7 @@ mod tests {
     #[test]
     fn build_catalog_without_ru_uses_en_names() {
         let en_json = build_test_en_json(vec![
-            make_item("3031", "Infinity Edge", 3400, true, true, Some(vec![]), vec!["Damage"]),
+            make_item("3031", "Infinity Edge", 3400, true, true, Some(vec!["1038", "1018"]), Some(vec![]), vec!["Damage"]),
         ]);
 
         let catalog = build_catalog(en_json, None);
@@ -473,9 +513,9 @@ mod tests {
     #[test]
     fn items_sorted_by_gold_descending() {
         let en_json = build_test_en_json(vec![
-            make_item("1001", "Cheap Item", 1000, true, true, Some(vec![]), vec!["Damage"]),
-            make_item("1002", "Expensive Item", 4000, true, true, Some(vec![]), vec!["Damage"]),
-            make_item("1003", "Mid Item", 2500, true, true, Some(vec![]), vec!["Damage"]),
+            make_item("1001", "Cheap Item", 1000, true, true, Some(vec!["1036"]), Some(vec![]), vec!["Damage"]),
+            make_item("1002", "Expensive Item", 4000, true, true, Some(vec!["1038", "1037"]), Some(vec![]), vec!["Damage"]),
+            make_item("1003", "Mid Item", 2500, true, true, Some(vec!["1036", "1037"]), Some(vec![]), vec!["Damage"]),
         ]);
 
         let catalog = build_catalog(en_json, None);

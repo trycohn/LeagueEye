@@ -6,7 +6,7 @@ import { Coins, X, Loader2 } from "lucide-react";
 import type { GoldComparisonData } from "../lib/types";
 
 const POLL_INTERVAL = 4_000;
-const OVERLAY_WIDTH = 196;
+const OVERLAY_WIDTH = 226;
 
 export function GoldOverlayApp() {
   const [data, setData] = useState<GoldComparisonData | null>(null);
