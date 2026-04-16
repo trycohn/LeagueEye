@@ -1330,6 +1330,44 @@ pub async fn get_frequent_teammates(
 
 // ─── App version & updates ──────────────────────────────────────────────────
 
+// ─── Post-Game Review ───────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn request_post_game_review(
+    app: tauri::AppHandle,
+    api: State<'_, ServerApiClient>,
+    match_id: String,
+    puuid: String,
+    force_refresh: Option<bool>,
+) -> Result<(), String> {
+    let force = force_refresh.unwrap_or(false);
+
+    let api_client = api.inner().clone();
+    let app_handle = app.clone();
+
+    tokio::spawn(async move {
+        if let Err(e) = api_client.stream_review(&app_handle, &match_id, &puuid, force).await {
+            let _ = app_handle.emit("review-stream", CoachStreamPayload {
+                kind: "review-error".to_string(),
+                text: Some(e),
+            });
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_cached_review(
+    api: State<'_, ServerApiClient>,
+    match_id: String,
+    puuid: String,
+) -> Result<Option<PostGameReview>, String> {
+    api.get_cached_review(&match_id, &puuid).await
+}
+
+// ─── App version & updates ──────────────────────────────────────────────────
+
 #[tauri::command]
 pub fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()

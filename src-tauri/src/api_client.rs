@@ -316,6 +316,114 @@ impl ServerApiClient {
 
         Ok(())
     }
+
+    // --- Post-Game Review ---
+
+    pub async fn stream_review(
+        &self,
+        app: &AppHandle,
+        match_id: &str,
+        puuid: &str,
+        force_refresh: bool,
+    ) -> Result<(), String> {
+        let url = format!("{}/api/review/stream", self.base_url);
+
+        let body = serde_json::json!({
+            "matchId": match_id,
+            "puuid": puuid,
+            "forceRefresh": force_refresh,
+        });
+
+        let response = self.client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| {
+                let msg = format!("Ошибка соединения с сервером: {}", e);
+                let _ = app.emit("review-stream", CoachStreamPayload {
+                    kind: "error".to_string(),
+                    text: Some(msg.clone()),
+                });
+                msg
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            let msg = format!("Ошибка сервера ({}): {}", status, body);
+            let _ = app.emit("review-stream", CoachStreamPayload {
+                kind: "error".to_string(),
+                text: Some(msg.clone()),
+            });
+            return Err(msg);
+        }
+
+        let mut buffer = String::new();
+        let mut response = response;
+        let mut got_end = false;
+
+        loop {
+            let chunk = match response.chunk().await {
+                Ok(Some(c)) => c,
+                Ok(None) => break,
+                Err(e) => {
+                    let msg = format!("Ошибка чтения потока: {}", e);
+                    let _ = app.emit("review-stream", CoachStreamPayload {
+                        kind: "error".to_string(),
+                        text: Some(msg.clone()),
+                    });
+                    return Err(msg);
+                }
+            };
+
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(pos) = buffer.find('\n') {
+                let line = buffer[..pos].trim_end().to_string();
+                buffer = buffer[pos + 1..].to_string();
+
+                if line.is_empty() || line.starts_with(':') {
+                    continue;
+                }
+                if let Some(data) = line.strip_prefix("data:") {
+                    let data = data.trim_start();
+                    if let Ok(payload) = serde_json::from_str::<CoachStreamPayload>(data) {
+                        // Remap: start→review-start, delta→review-delta, etc.
+                        let review_kind = match payload.kind.as_str() {
+                            "start" => "review-start",
+                            "delta" => "review-delta",
+                            "end" => "review-end",
+                            "error" => "review-error",
+                            "cached" => "review-cached",
+                            other => other,
+                        };
+                        if matches!(payload.kind.as_str(), "end" | "error" | "cached") {
+                            got_end = true;
+                        }
+                        let _ = app.emit("review-stream", CoachStreamPayload {
+                            kind: review_kind.to_string(),
+                            text: payload.text,
+                        });
+                    }
+                }
+            }
+        }
+
+        if !got_end {
+            let _ = app.emit("review-stream", CoachStreamPayload {
+                kind: "review-end".to_string(),
+                text: None,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn get_cached_review(&self, match_id: &str, puuid: &str) -> Result<Option<PostGameReview>, String> {
+        let result: Option<PostGameReview> = self.get(&format!("/api/review/{}/{}", match_id, puuid)).await?;
+        Ok(result)
+    }
 }
 
 /// Request sent from client to server for live game enrichment

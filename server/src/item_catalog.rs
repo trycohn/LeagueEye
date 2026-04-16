@@ -19,6 +19,8 @@ pub struct ItemCatalog {
     pub en_to_gold: HashMap<String, i32>,
     /// EN display_name -> tags
     pub en_to_tags: HashMap<String, Vec<String>>,
+    /// Item ID -> RU name (for post-game review by item ID)
+    pub id_to_ru: HashMap<i32, String>,
 }
 
 pub async fn load_item_catalog() -> Result<ItemCatalog, String> {
@@ -90,6 +92,7 @@ fn empty_catalog() -> ItemCatalog {
         en_to_ru: HashMap::new(),
         en_to_gold: HashMap::new(),
         en_to_tags: HashMap::new(),
+        id_to_ru: HashMap::new(),
     }
 }
 
@@ -117,6 +120,7 @@ fn build_catalog(en_json: serde_json::Value, ru_json: Option<serde_json::Value>)
     let mut en_to_ru = HashMap::new();
     let mut en_to_gold = HashMap::new();
     let mut en_to_tags = HashMap::new();
+    let mut id_to_ru = HashMap::new();
     let mut items = Vec::new();
 
     for (id_str, info) in en_data {
@@ -154,6 +158,7 @@ fn build_catalog(en_json: serde_json::Value, ru_json: Option<serde_json::Value>)
         en_to_ru.insert(en_name.clone(), ru_name.clone());
         en_to_gold.insert(en_name.clone(), gold_total);
         en_to_tags.insert(en_name.clone(), tags.clone());
+        id_to_ru.insert(id, ru_name.clone());
 
         // Filter for final items (AI catalog in system prompt)
         if is_final_item(info) {
@@ -182,6 +187,7 @@ fn build_catalog(en_json: serde_json::Value, ru_json: Option<serde_json::Value>)
         en_to_ru,
         en_to_gold,
         en_to_tags,
+        id_to_ru,
     }
 }
 

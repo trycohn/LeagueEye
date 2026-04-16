@@ -126,6 +126,9 @@ async fn main() {
         .route("/api/live/enrich", post(routes::live::enrich_live_game))
         // AI Coach streaming
         .route("/api/coach/stream", post(routes::coach::stream_coach))
+        // Post-game review
+        .route("/api/review/stream", post(routes::review::stream_review))
+        .route("/api/review/{match_id}/{puuid}", get(routes::review::get_cached_review))
         // Updates
         .route("/api/updates/{target}/{arch}/{current_version}", get(routes::updates::check_update))
         .route("/api/updates/download/{filename}", get(routes::updates::download_update))

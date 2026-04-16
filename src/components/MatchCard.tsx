@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ChevronDown, Loader2 } from "lucide-react";
+import { ChevronDown, Loader2, Brain } from "lucide-react";
 import type { MatchSummary, MatchDetail } from "../lib/types";
 import {
   championIconUrl,
@@ -22,9 +22,10 @@ const POSITION_LABEL: Record<string, string> = {
 interface Props {
   match: MatchSummary;
   onPlayerClick: (gameName: string, tagLine: string) => void;
+  onReview?: (matchId: string) => void;
 }
 
-export function MatchCard({ match: m, onPlayerClick }: Props) {
+export function MatchCard({ match: m, onPlayerClick, onReview }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [detail, setDetail] = useState<MatchDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -186,6 +187,20 @@ export function MatchCard({ match: m, onPlayerClick }: Props) {
       {expanded && detail && (
         <div className="border-t border-border/50">
           <MatchDetailView detail={detail} onPlayerClick={onPlayerClick} />
+          {onReview && (
+            <div className="px-3 py-2 border-t border-border/30">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onReview(m.matchId);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-accent/10 text-accent text-xs font-medium hover:bg-accent/20 transition-colors"
+              >
+                <Brain size={14} />
+                AI Разбор
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

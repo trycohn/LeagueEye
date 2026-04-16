@@ -17,10 +17,11 @@ import { useUpdater } from "./hooks/useUpdater";
 import { useFavorites } from "./hooks/useFavorites";
 import { HomeView } from "./components/HomeView";
 import { SettingsView } from "./components/SettingsView";
+import { PostGameReviewView } from "./components/PostGameReviewView";
 import { Eye, AlertCircle, Loader2, ChevronLeft, Settings } from "lucide-react";
-import type { DetectedAccount, FrequentTeammate } from "./lib/types";
+import type { DetectedAccount, FrequentTeammate, MatchSummary, MatchDetail } from "./lib/types";
 
-type View = "home" | "profile" | "live" | "settings" | "compare";
+type View = "home" | "profile" | "live" | "settings" | "compare" | "review";
 type LeagueWindowVisibilityPayload = { visible: boolean };
 
 const POLL_INTERVAL_MS = 4_000;
@@ -51,6 +52,9 @@ export default function App() {
   const [clientOnline, setClientOnline] = useState(false);
   const [leagueWindowVisible, setLeagueWindowVisible] = useState(false);
   const [overlayRetryNonce, setOverlayRetryNonce] = useState(0);
+  const [reviewMatchId, setReviewMatchId] = useState<string | null>(null);
+  const [reviewMatchSummary, setReviewMatchSummary] = useState<MatchSummary | null>(null);
+  const [reviewMatchDetail, setReviewMatchDetail] = useState<MatchDetail | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { liveData, phase } = useLiveGame(clientOnline);
@@ -284,6 +288,22 @@ export default function App() {
     setView("compare");
   }
 
+  async function handleReview(matchId: string) {
+    const matchSummary = matches.find((m) => m.matchId === matchId) ?? null;
+    setReviewMatchId(matchId);
+    setReviewMatchSummary(matchSummary);
+    setReviewMatchDetail(null);
+    setView("review");
+
+    // Load match detail in background
+    try {
+      const detail = await invoke<MatchDetail>("get_match_detail", { matchId });
+      setReviewMatchDetail(detail);
+    } catch (e) {
+      console.error("Failed to load match detail for review:", e);
+    }
+  }
+
   return (
     <div className="min-h-screen bg-bg-primary">
       <header className="sticky top-0 z-10 bg-bg-primary/80 backdrop-blur-md border-b border-border">
@@ -427,6 +447,7 @@ export default function App() {
                   totalLosses={totalLosses}
                   onLoadMore={loadMoreMatches}
                   onPlayerClick={handleSearch}
+                  onReview={handleReview}
                 />
               </div>
               <div>
@@ -453,6 +474,18 @@ export default function App() {
             }}
             favorites={favorites}
             onBack={() => setView("profile")}
+          />
+        )}
+
+        {/* REVIEW VIEW */}
+        {view === "review" && reviewMatchId && profile && (
+          <PostGameReviewView
+            matchId={reviewMatchId}
+            puuid={profile.puuid}
+            matchSummary={reviewMatchSummary}
+            matchDetail={reviewMatchDetail}
+            onBack={() => setView("profile")}
+            onPlayerClick={handleSearch}
           />
         )}
       </main>

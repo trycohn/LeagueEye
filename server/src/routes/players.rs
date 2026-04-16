@@ -31,6 +31,8 @@ pub async fn search_player(
 
     let _ = state.db.save_account(&profile).await;
     let _ = state.db.save_rank_snapshot(&account.puuid, &ranked).await;
+    // Backfill LP deltas now that we have a fresh rank snapshot
+    let _ = state.db.backfill_lp_deltas(&account.puuid).await;
 
     Ok(Json(profile))
 }

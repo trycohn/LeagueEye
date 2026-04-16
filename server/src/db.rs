@@ -1,6 +1,7 @@
 use sqlx::PgPool;
 use leagueeye_shared::models::*;
 
+#[derive(Clone)]
 pub struct Db {
     pool: PgPool,
 }
@@ -91,7 +92,8 @@ impl Db {
                   cs, gold, damage, vision_score, position,
                   game_duration, game_creation, queue_id, items, summoner_spells, lp_delta)
                  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
-                 ON CONFLICT (match_id, puuid) DO NOTHING"
+                 ON CONFLICT (match_id, puuid) DO UPDATE SET
+                    lp_delta = COALESCE(matches.lp_delta, EXCLUDED.lp_delta)"
             )
             .bind(&m.match_id)
             .bind(puuid)
@@ -265,6 +267,40 @@ impl Db {
         }
         Ok(())
     }
+    /// Compute and backfill lp_delta for ranked solo matches that have NULL lp_delta.
+    /// Uses rank_snapshots recorded before game start and after game end.
+    pub async fn backfill_lp_deltas(&self, puuid: &str) -> Result<(), sqlx::Error> {
+        // queue_id 420 = Ranked Solo/Duo
+        let rows: Vec<(String, i64, i64)> = sqlx::query_as(
+            "SELECT match_id, game_creation, game_duration
+             FROM matches
+             WHERE puuid = $1 AND queue_id = 420 AND lp_delta IS NULL
+             ORDER BY game_creation DESC"
+        )
+        .bind(puuid)
+        .fetch_all(&self.pool)
+        .await?;
+
+        for (match_id, game_creation, game_duration) in rows {
+            let game_end_ms = game_creation + game_duration * 1000;
+            let before = self.get_lp_at(puuid, game_creation, true).await?;
+            let after = self.get_lp_at(puuid, game_end_ms, false).await?;
+
+            if let (Some(lp_before), Some(lp_after)) = (before, after) {
+                let delta = lp_after - lp_before;
+                sqlx::query(
+                    "UPDATE matches SET lp_delta = $1 WHERE match_id = $2 AND puuid = $3"
+                )
+                .bind(delta)
+                .bind(&match_id)
+                .bind(puuid)
+                .execute(&self.pool)
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
     // --- Matchups ---
 
     pub async fn get_matchups(&self, puuid: &str) -> Result<Vec<MatchupStat>, sqlx::Error> {
@@ -384,6 +420,75 @@ impl Db {
         }).collect();
 
         Ok(teammates)
+    }
+
+    // --- Match Reviews ---
+
+    pub async fn get_review(&self, match_id: &str, puuid: &str) -> Result<Option<PostGameReview>, sqlx::Error> {
+        let row: Option<(String, String, String, i64)> = sqlx::query_as(
+            "SELECT match_id, puuid, review_text, created_at FROM match_reviews WHERE match_id = $1 AND puuid = $2"
+        )
+        .bind(match_id)
+        .bind(puuid)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|(match_id, puuid, review_text, created_at)| PostGameReview {
+            match_id,
+            puuid,
+            review_text,
+            created_at,
+        }))
+    }
+
+    pub async fn save_review(&self, match_id: &str, puuid: &str, text: &str) -> Result<(), sqlx::Error> {
+        let now = now_ms() / 1000; // seconds
+        sqlx::query(
+            "INSERT INTO match_reviews (match_id, puuid, review_text, created_at)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (match_id, puuid) DO UPDATE SET review_text = EXCLUDED.review_text, created_at = EXCLUDED.created_at"
+        )
+        .bind(match_id)
+        .bind(puuid)
+        .bind(text)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    // --- Match Timelines ---
+
+    pub async fn get_timeline(&self, match_id: &str) -> Result<Option<serde_json::Value>, sqlx::Error> {
+        let row: Option<(serde_json::Value,)> = sqlx::query_as(
+            "SELECT timeline_json FROM match_timelines WHERE match_id = $1"
+        )
+        .bind(match_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.0))
+    }
+
+    pub async fn save_timeline(&self, match_id: &str, timeline_json: &serde_json::Value) -> Result<(), sqlx::Error> {
+        let now = now_ms() / 1000;
+        sqlx::query(
+            "INSERT INTO match_timelines (match_id, timeline_json, created_at)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (match_id) DO NOTHING"
+        )
+        .bind(match_id)
+        .bind(timeline_json)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    // --- Champion Stats for a specific puuid (for review context) ---
+
+    pub async fn get_champion_stats_for_player(&self, puuid: &str) -> Result<Vec<ChampionStat>, sqlx::Error> {
+        let matches = self.get_cached_matches_paged(puuid, 0, 500).await?;
+        Ok(build_champion_stats(&matches))
     }
 
     pub async fn get_global_dashboard_data(&self) -> Result<GlobalDashboardData, sqlx::Error> {

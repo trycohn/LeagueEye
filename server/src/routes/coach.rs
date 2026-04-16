@@ -607,33 +607,8 @@ pub async fn stream_coach(
 ) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
     let config = state.ai_coach_config.clone();
 
-    // Load item catalog (lazy, cached in OnceCell)
-    let catalog = state
-        .item_catalog
-        .get_or_try_init(|| async {
-            crate::item_catalog::load_item_catalog()
-                .await
-                .map_err(|e| {
-                    log::error!("[coach] Failed to load item catalog: {}", e);
-                    e
-                })
-        })
-        .await
-        .ok();
-
-    // Load champion catalog (lazy, cached in OnceCell)
-    let champ_catalog = state
-        .champion_catalog
-        .get_or_try_init(|| async {
-            crate::champion_catalog::load_champion_catalog()
-                .await
-                .map_err(|e| {
-                    log::error!("[coach] Failed to load champion catalog: {}", e);
-                    e
-                })
-        })
-        .await
-        .ok();
+    // Load catalogs (lazy, cached in OnceCell)
+    let (catalog, champ_catalog) = load_catalogs(&state).await;
 
     let system_prompt = build_system_prompt(&ctx, catalog, champ_catalog);
     let user_message = build_user_message(&ctx, catalog, champ_catalog);
@@ -650,6 +625,37 @@ pub async fn stream_coach(
 }
 
 type CoachStream = Pin<Box<dyn Stream<Item = Result<Event, std::convert::Infallible>> + Send>>;
+
+/// Load item and champion catalogs from AppState (lazy, cached in OnceCell).
+pub async fn load_catalogs(state: &Arc<AppState>) -> (Option<&ItemCatalog>, Option<&ChampionCatalog>) {
+    let catalog = state
+        .item_catalog
+        .get_or_try_init(|| async {
+            crate::item_catalog::load_item_catalog()
+                .await
+                .map_err(|e| {
+                    log::error!("[coach] Failed to load item catalog: {}", e);
+                    e
+                })
+        })
+        .await
+        .ok();
+
+    let champ_catalog = state
+        .champion_catalog
+        .get_or_try_init(|| async {
+            crate::champion_catalog::load_champion_catalog()
+                .await
+                .map_err(|e| {
+                    log::error!("[coach] Failed to load champion catalog: {}", e);
+                    e
+                })
+        })
+        .await
+        .ok();
+
+    (catalog, champ_catalog)
+}
 
 fn log_outbound_request(provider: &str, url: &str, body: &serde_json::Value) {
     match serde_json::to_string_pretty(body) {
@@ -683,7 +689,7 @@ fn invalid_api_key_message(provider: AiCoachProvider) -> &'static str {
     }
 }
 
-fn make_ai_stream(
+pub fn make_ai_stream(
     config: Option<crate::AiCoachConfig>,
     system_prompt: String,
     user_message: String,

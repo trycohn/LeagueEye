@@ -12,6 +12,7 @@ interface Props {
   totalLosses: number;
   onLoadMore: () => void;
   onPlayerClick: (gameName: string, tagLine: string) => void;
+  onReview?: (matchId: string) => void;
 }
 
 export function MatchHistory({
@@ -23,6 +24,7 @@ export function MatchHistory({
   totalLosses,
   onLoadMore,
   onPlayerClick,
+  onReview,
 }: Props) {
   const sentinelRef = useRef<HTMLDivElement>(null);
 
@@ -68,7 +70,7 @@ export function MatchHistory({
 
       <div className="flex flex-col gap-1.5">
         {matches.map((m) => (
-          <MatchCard key={m.matchId} match={m} onPlayerClick={onPlayerClick} />
+          <MatchCard key={m.matchId} match={m} onPlayerClick={onPlayerClick} onReview={onReview} />
         ))}
       </div>
 

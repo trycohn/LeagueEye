@@ -186,13 +186,22 @@ export interface GlobalDashboardData {
 // --- AI Coach ---
 
 export interface CoachStreamPayload {
-  kind: "start" | "delta" | "end" | "error" | "draft-start" | "draft-delta" | "draft-end" | "draft-error";
+  kind: "start" | "delta" | "end" | "error" | "cached" | "draft-start" | "draft-delta" | "draft-end" | "draft-error" | "review-start" | "review-delta" | "review-end" | "review-error" | "review-cached";
   text: string | null;
 }
 
 export interface CoachMessage {
   text: string;
   timestamp: number;
+}
+
+// --- Post-Game Review ---
+
+export interface PostGameReview {
+  matchId: string;
+  puuid: string;
+  reviewText: string;
+  createdAt: number;
 }
 
 // --- Draft Helper ---

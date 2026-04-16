@@ -183,6 +183,11 @@ impl RiotApiClient {
         self.get(&url).await
     }
 
+    pub async fn get_match_timeline(&self, match_id: &str) -> Result<MatchTimelineDto, String> {
+        let url = format!("{}/lol/match/v5/matches/{}/timeline", REGIONAL_URL, match_id);
+        self.get(&url).await
+    }
+
     pub async fn get_active_game(&self, puuid: &str) -> Result<Option<SpectatorGame>, String> {
         let summoner = self.get_summoner_by_puuid(puuid).await?;
         let Some(summoner_id) = summoner

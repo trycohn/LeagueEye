@@ -524,6 +524,8 @@ pub fn run() {
             commands::remove_favorite,
             commands::is_favorite,
             commands::get_frequent_teammates,
+            commands::request_post_game_review,
+            commands::get_cached_review,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

@@ -646,8 +646,81 @@ pub struct CoachingContext {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct CoachStreamPayload {
-    pub kind: String, // "start" | "delta" | "end" | "error"
+    pub kind: String, // "start" | "delta" | "end" | "error" | "cached"
     pub text: Option<String>,
+}
+
+// --- Post-Game Review ---
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PostGameReviewRequest {
+    pub match_id: String,
+    pub puuid: String,
+    #[serde(default)]
+    pub force_refresh: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PostGameReview {
+    pub match_id: String,
+    pub puuid: String,
+    pub review_text: String,
+    pub created_at: i64,
+}
+
+// --- Match Timeline (Riot API v5) ---
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MatchTimelineDto {
+    pub metadata: MatchMetadata,
+    pub info: TimelineInfo,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineInfo {
+    pub frame_interval: Option<i64>,
+    pub frames: Vec<TimelineFrame>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineFrame {
+    pub timestamp: i64,
+    pub participant_frames: Option<serde_json::Value>,
+    pub events: Vec<TimelineEvent>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineEvent {
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub timestamp: i64,
+    pub killer_id: Option<i64>,
+    pub victim_id: Option<i64>,
+    pub assisting_participant_ids: Option<Vec<i64>>,
+    pub position: Option<TimelinePosition>,
+    pub monster_type: Option<String>,
+    pub monster_sub_type: Option<String>,
+    pub building_type: Option<String>,
+    pub tower_type: Option<String>,
+    pub lane_type: Option<String>,
+    pub team_id: Option<i32>,
+    pub item_id: Option<i64>,
+    pub participant_id: Option<i64>,
+    pub skill_slot: Option<i32>,
+    pub level_up_type: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelinePosition {
+    pub x: i32,
+    pub y: i32,
 }
 
 pub fn dto_to_summary(
