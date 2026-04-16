@@ -15,7 +15,7 @@ export function GoldLaneRow({ lane }: { lane: LaneGoldComparison }) {
   const diffColor = diff > 0 ? "text-win" : diff < 0 ? "text-loss" : "text-text-muted";
   const diffText = diff > 0 ? `+${formatGold(diff)}` : diff < 0 ? formatGold(diff) : "—";
   const counterTitle = lane.counterItem
-    ? `Тебе против ${lane.enemyChampionName}: ${lane.counterItem.name} — ${lane.counterItem.reason}`
+    ? `Тебе против ${lane.enemyChampionName}: ${lane.counterItem.name} — ${lane.counterItem.counterReason}${lane.counterItem.buildReason ? ` • ${lane.counterItem.buildReason}` : ""}`
     : `Тебе против ${lane.enemyChampionName}: подходящий контр-предмет не определён`;
 
   const champImg = (name: string) => (

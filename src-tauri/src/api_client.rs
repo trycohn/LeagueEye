@@ -172,8 +172,22 @@ impl ServerApiClient {
         // Using single-newline parsing to avoid buffering delays from waiting for "\n\n".
         let mut buffer = String::new();
         let mut response = response;
+        let mut got_end = false;
 
-        while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        loop {
+            let chunk = match response.chunk().await {
+                Ok(Some(c)) => c,
+                Ok(None) => break, // stream finished
+                Err(e) => {
+                    let msg = format!("Ошибка чтения потока: {}", e);
+                    let _ = app.emit("coach-stream", CoachStreamPayload {
+                        kind: "error".to_string(),
+                        text: Some(msg.clone()),
+                    });
+                    return Err(msg);
+                }
+            };
+
             buffer.push_str(&String::from_utf8_lossy(&chunk));
 
             while let Some(pos) = buffer.find('\n') {
@@ -186,10 +200,22 @@ impl ServerApiClient {
                 if let Some(data) = line.strip_prefix("data:") {
                     let data = data.trim_start();
                     if let Ok(payload) = serde_json::from_str::<CoachStreamPayload>(data) {
+                        if payload.kind == "end" || payload.kind == "error" {
+                            got_end = true;
+                        }
                         let _ = app.emit("coach-stream", &payload);
                     }
                 }
             }
+        }
+
+        // Safety: if the server closed the stream without sending "end"/"error",
+        // emit "end" so the frontend doesn't stay stuck in streaming state.
+        if !got_end {
+            let _ = app.emit("coach-stream", CoachStreamPayload {
+                kind: "end".to_string(),
+                text: None,
+            });
         }
 
         Ok(())
@@ -231,8 +257,22 @@ impl ServerApiClient {
 
         let mut buffer = String::new();
         let mut response = response;
+        let mut got_end = false;
 
-        while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        loop {
+            let chunk = match response.chunk().await {
+                Ok(Some(c)) => c,
+                Ok(None) => break,
+                Err(e) => {
+                    let msg = format!("Ошибка чтения потока: {}", e);
+                    let _ = app.emit("coach-stream", CoachStreamPayload {
+                        kind: "draft-error".to_string(),
+                        text: Some(msg.clone()),
+                    });
+                    return Err(msg);
+                }
+            };
+
             buffer.push_str(&String::from_utf8_lossy(&chunk));
 
             while let Some(pos) = buffer.find('\n') {
@@ -253,6 +293,9 @@ impl ServerApiClient {
                             "error" => "draft-error",
                             other => other,
                         };
+                        if payload.kind == "end" || payload.kind == "error" {
+                            got_end = true;
+                        }
                         let _ = app.emit("coach-stream", CoachStreamPayload {
                             kind: draft_kind.to_string(),
                             text: payload.text,
@@ -260,6 +303,15 @@ impl ServerApiClient {
                     }
                 }
             }
+        }
+
+        // Safety: if the server closed the stream without sending "end"/"error",
+        // emit "draft-end" so the frontend doesn't stay stuck in streaming state.
+        if !got_end {
+            let _ = app.emit("coach-stream", CoachStreamPayload {
+                kind: "draft-end".to_string(),
+                text: None,
+            });
         }
 
         Ok(())

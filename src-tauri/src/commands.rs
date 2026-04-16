@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tauri::State;
+use tauri::{Emitter, State};
 
 use crate::ai_coach::{self, CoachState, ChampionMetaInfo, ChampionAbility};
 use crate::api_client::{ServerApiClient, EnrichLiveRequest, EnrichLivePlayer};
@@ -711,7 +711,13 @@ pub async fn request_coaching(
     let app_handle = app.clone();
 
     tokio::spawn(async move {
-        let _ = api_client.stream_coaching(&app_handle, &ctx).await;
+        if let Err(e) = api_client.stream_coaching(&app_handle, &ctx).await {
+            // Safety: emit error in case stream_coaching didn't do it itself
+            let _ = app_handle.emit("coach-stream", CoachStreamPayload {
+                kind: "error".to_string(),
+                text: Some(e),
+            });
+        }
         if let Ok(mut s) = coach_state_arc.lock() {
             s.is_requesting = false;
         }
@@ -872,7 +878,12 @@ pub async fn request_draft_advice(
     let app_handle = app.clone();
 
     tokio::spawn(async move {
-        let _ = api_client.stream_draft_coaching(&app_handle, &ctx).await;
+        if let Err(e) = api_client.stream_draft_coaching(&app_handle, &ctx).await {
+            let _ = app_handle.emit("coach-stream", CoachStreamPayload {
+                kind: "draft-error".to_string(),
+                text: Some(e),
+            });
+        }
         if let Ok(mut s) = coach_state_arc.lock() {
             s.is_requesting = false;
         }
@@ -1246,12 +1257,14 @@ pub async fn get_gold_comparison(
                         .champion_name
                         .as_ref()
                         .and_then(|champion_name| champ_meta.get(champion_name));
+                    let enemy_name = enemy.champion_name.as_deref().unwrap_or("");
                     recommend_counter_item(
                         &item_catalog,
                         my_player,
                         my_meta,
                         enemy,
                         enemy_meta,
+                        enemy_name,
                         game_time,
                     )
                 }),

@@ -60,55 +60,8 @@ Determine how to proceed based on what was provided in `<input_document>`.
 
 2. **Setup Environment**
 
-   First, check the current branch:
-
-   ```bash
-   current_branch=$(git branch --show-current)
-   default_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
-
-   # Fallback if remote HEAD isn't set
-   if [ -z "$default_branch" ]; then
-     default_branch=$(git rev-parse --verify origin/main >/dev/null 2>&1 && echo "main" || echo "master")
-   fi
-   ```
-
-   **If already on a feature branch** (not the default branch):
-
-   First, check whether the branch name is **meaningful** — a name like `feat/crowd-sniff` or `fix/email-validation` tells future readers what the work is about. Auto-generated worktree names (e.g., `worktree-jolly-beaming-raven`) or other opaque names do not.
-
-   If the branch name is meaningless or auto-generated, suggest renaming it before continuing:
-   ```bash
-   git branch -m <meaningful-name>
-   ```
-   Derive the new name from the plan title or work description (e.g., `feat/crowd-sniff`). Present the rename as a recommended option alongside continuing as-is.
-
-   Then ask: "Continue working on `[current_branch]`, or create a new branch?"
-   - If continuing (with or without rename), proceed to step 3
-   - If creating new, follow Option A or B below
-
-   **If on the default branch**, choose how to proceed:
-
-   **Option A: Create a new branch**
-   ```bash
-   git pull origin [default_branch]
-   git checkout -b feature-branch-name
-   ```
-   Use a meaningful name based on the work (e.g., `feat/user-authentication`, `fix/email-validation`).
-
-   **Option B: Use a worktree (recommended for parallel development)**
-   ```bash
-   skill: git-worktree
-   # The skill will create a new branch from the default branch in an isolated worktree
-   ```
-
-   **Option C: Continue on the default branch**
-   - Requires explicit user confirmation
-   - Only proceed after the user explicitly agrees to work directly on `[default_branch]`
-
-   **Recommendation**: Use worktree if:
-   - You want to work on multiple features simultaneously
-   - You want to keep the default branch clean while experimenting
-   - You plan to switch between branches frequently
+   - Work from the repository root (or the path the plan specifies).
+   - If AGENTS.md, CLAUDE.md, or the plan lists prerequisites (services, env files, install steps), satisfy them before heavy implementation so builds and tests behave as expected.
 
 3. **Create Todo List** _(skip if Phase 0 already built one, or if Phase 0 routed as Trivial)_
    - Use your available task tracking tool (e.g., TodoWrite, task lists) to break the plan into actionable tasks

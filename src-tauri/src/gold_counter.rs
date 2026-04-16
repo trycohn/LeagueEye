@@ -59,31 +59,42 @@ pub struct ItemSignals {
 pub struct CounterItemSuggestion {
     pub item_id: i32,
     pub name: String,
-    pub reason: String,
+    pub build_reason: Option<String>,
+    pub counter_reason: String,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 struct BuyerProfile {
-    ap: bool,
-    ad: bool,
-    tank: bool,
-    marksman: bool,
-    fighter: bool,
+    ap_weight: f32,
+    ad_weight: f32,
+    tank_weight: f32,
+    is_marksman: bool,
+}
+
+impl Default for BuyerProfile {
+    fn default() -> Self {
+        Self {
+            ap_weight: 0.0,
+            ad_weight: 0.5,
+            tank_weight: 0.0,
+            is_marksman: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
 struct ThreatProfile {
-    healing: bool,
-    shields: bool,
-    ap_burst: bool,
-    ad_burst: bool,
-    autoattack: bool,
-    crit: bool,
-    on_hit: bool,
-    hard_cc: bool,
-    tanky: bool,
-    magic_damage: bool,
-    physical_damage: bool,
+    healing: f32,
+    shields: f32,
+    ap_burst: f32,
+    ad_burst: f32,
+    autoattack: f32,
+    crit: f32,
+    on_hit: f32,
+    hard_cc: f32,
+    tanky: f32,
+    magic_damage: f32,
+    physical_damage: f32,
 }
 
 pub async fn get_or_fetch_item_catalog(
@@ -134,13 +145,14 @@ pub fn recommend_counter_item(
     my_meta: Option<&ChampionMetaInfo>,
     enemy_player: &lcu::LiveFullPlayer,
     enemy_meta: Option<&ChampionMetaInfo>,
+    enemy_champion_name: &str,
     game_time: Option<i64>,
 ) -> Option<CounterItemSuggestion> {
     if catalog.counter_candidates.is_empty() {
         return None;
     }
 
-    let buyer = derive_buyer_profile(my_meta);
+    let buyer = derive_buyer_profile(my_player, my_meta, catalog);
     let threat = derive_enemy_threat(enemy_player, enemy_meta, catalog);
     let owned_item_ids: HashSet<i32> = my_player
         .items
@@ -158,6 +170,7 @@ pub fn recommend_counter_item(
         &buyer,
         &threat,
         &owned_item_ids,
+        enemy_champion_name,
         game_time,
     )
 }
@@ -429,11 +442,53 @@ fn is_counter_item_candidate(info: &serde_json::Value) -> bool {
     true
 }
 
-fn derive_buyer_profile(meta: Option<&ChampionMetaInfo>) -> BuyerProfile {
+fn derive_buyer_profile(
+    my_player: &lcu::LiveFullPlayer,
+    meta: Option<&ChampionMetaInfo>,
+    catalog: &ItemCatalogSnapshot,
+) -> BuyerProfile {
+    let is_marksman = meta
+        .map(|m| m.tags.iter().any(|t| t == "Marksman"))
+        .unwrap_or(false);
+
+    // Try to derive from actual items first
+    if let Some(items) = my_player.items.as_ref() {
+        let mut ap_gold = 0i32;
+        let mut ad_gold = 0i32;
+        let mut tank_gold = 0i32;
+        let mut total_gold = 0i32;
+
+        for item in items {
+            let Some(item_id) = item.item_id else { continue };
+            let Some(entry) = catalog.items_by_id.get(&item_id) else { continue };
+            let gold = entry.gold_total.max(0);
+            if gold == 0 { continue; }
+            total_gold += gold;
+
+            if entry.signals.ap_item { ap_gold += gold; }
+            if entry.signals.ad_item { ad_gold += gold; }
+            if entry.signals.tank_item || entry.signals.armor || entry.signals.magic_resist {
+                tank_gold += gold;
+            }
+        }
+
+        // If we have meaningful item data (at least one completed item worth >= 1000g)
+        if total_gold >= 1000 {
+            let total = total_gold as f32;
+            return BuyerProfile {
+                ap_weight: (ap_gold as f32 / total).min(1.0),
+                ad_weight: (ad_gold as f32 / total).min(1.0),
+                tank_weight: (tank_gold as f32 / total).min(1.0),
+                is_marksman,
+            };
+        }
+    }
+
+    // Fallback: derive from champion meta tags
     let Some(meta) = meta else {
         return BuyerProfile {
-            ad: true,
-            fighter: true,
+            ad_weight: 0.5,
+            is_marksman,
             ..BuyerProfile::default()
         };
     };
@@ -443,28 +498,30 @@ fn derive_buyer_profile(meta: Option<&ChampionMetaInfo>) -> BuyerProfile {
     let magic_hits = count_hits(&text, &["magic damage", "ability power"]);
     let physical_hits = count_hits(&text, &["physical damage", "attack damage"]);
 
-    let marksman = tags.contains("Marksman");
+    let mage = tags.contains("Mage");
     let fighter = tags.contains("Fighter");
     let tank = tags.contains("Tank");
-    let mage = tags.contains("Mage");
     let assassin = tags.contains("Assassin");
 
-    let ap = mage || magic_hits > physical_hits + 1 || (assassin && magic_hits > physical_hits);
-    let mut ad = marksman
+    let ap_signal = mage || magic_hits > physical_hits + 1 || (assassin && magic_hits > physical_hits);
+    let ad_signal = is_marksman
         || physical_hits > magic_hits
-        || (fighter && !ap)
-        || (assassin && !ap);
+        || (fighter && !ap_signal)
+        || (assassin && !ap_signal);
 
-    if !ap && !ad && !tank {
-        ad = true;
+    let ap_weight = if ap_signal { 0.7 } else { 0.0 };
+    let mut ad_weight = if ad_signal { 0.7 } else { 0.0 };
+    let tank_weight = if tank { 0.6 } else if fighter { 0.3 } else { 0.0 };
+
+    if !ap_signal && !ad_signal && !tank {
+        ad_weight = 0.5;
     }
 
     BuyerProfile {
-        ap,
-        ad,
-        tank,
-        marksman,
-        fighter,
+        ap_weight,
+        ad_weight,
+        tank_weight,
+        is_marksman,
     }
 }
 
@@ -475,6 +532,7 @@ fn derive_enemy_threat(
 ) -> ThreatProfile {
     let mut threat = ThreatProfile::default();
 
+    // Base level from champion meta tags (0.3 baseline)
     if let Some(meta) = enemy_meta {
         let tags: HashSet<&str> = meta.tags.iter().map(String::as_str).collect();
         let text = champion_text_blob(meta);
@@ -483,65 +541,81 @@ fn derive_enemy_threat(
         let magic_pref = magic_hits > physical_hits;
         let physical_pref = physical_hits > magic_hits;
 
-        threat.healing = text_has(
+        if text_has(
             &text,
-            &[
-                "heal",
-                "heals",
-                "healing",
-                "restore health",
-                "lifesteal",
-                "life steal",
-                "omnivamp",
-                "vamp",
-            ],
-        );
-        threat.shields = text_has(&text, &["shield", "shields"]);
-        threat.hard_cc = text_has(
+            &["heal", "heals", "healing", "restore health", "lifesteal", "life steal", "omnivamp", "vamp"],
+        ) {
+            threat.healing = 0.3;
+        }
+        if text_has(&text, &["shield", "shields"]) {
+            threat.shields = 0.3;
+        }
+        if text_has(
             &text,
-            &[
-                "stun",
-                "root",
-                "snare",
-                "taunt",
-                "fear",
-                "charm",
-                "suppress",
-                "airborne",
-                "knock up",
-                "sleep",
-                "polymorph",
-            ],
-        );
-        threat.autoattack = tags.contains("Marksman")
-            || count_hits(&text, &["basic attack", "critical strike", "attack speed"]) > 0;
-        threat.crit = count_hits(&text, &["critical strike"]) > 0;
-        threat.on_hit = count_hits(&text, &["on-hit", "on hit"]) > 0;
-        threat.tanky = tags.contains("Tank") || count_hits(&text, &["max health", "bonus health"]) > 0;
-        threat.magic_damage = tags.contains("Mage") || magic_pref;
-        threat.physical_damage = tags.contains("Marksman") || tags.contains("Fighter") || physical_pref;
-        threat.ap_burst = tags.contains("Mage") || (tags.contains("Assassin") && magic_pref);
-        threat.ad_burst = tags.contains("Marksman") || tags.contains("Fighter") || (tags.contains("Assassin") && !magic_pref);
+            &["stun", "root", "snare", "taunt", "fear", "charm", "suppress", "airborne", "knock up", "sleep", "polymorph"],
+        ) {
+            threat.hard_cc = 0.3;
+        }
+        if tags.contains("Marksman")
+            || count_hits(&text, &["basic attack", "critical strike", "attack speed"]) > 0
+        {
+            threat.autoattack = 0.3;
+        }
+        if count_hits(&text, &["critical strike"]) > 0 {
+            threat.crit = 0.3;
+        }
+        if count_hits(&text, &["on-hit", "on hit"]) > 0 {
+            threat.on_hit = 0.3;
+        }
+        if tags.contains("Tank") || count_hits(&text, &["max health", "bonus health"]) > 0 {
+            threat.tanky = 0.3;
+        }
+        if tags.contains("Mage") || magic_pref {
+            threat.magic_damage = 0.3;
+        }
+        if tags.contains("Marksman") || tags.contains("Fighter") || physical_pref {
+            threat.physical_damage = 0.3;
+        }
+        if tags.contains("Mage") || (tags.contains("Assassin") && magic_pref) {
+            threat.ap_burst = 0.3;
+        }
+        if tags.contains("Marksman")
+            || tags.contains("Fighter")
+            || (tags.contains("Assassin") && !magic_pref)
+        {
+            threat.ad_burst = 0.3;
+        }
     }
 
+    // Amplify from actual enemy items
     if let Some(items) = enemy_player.items.as_ref() {
         for item in items {
             let Some(item_id) = item.item_id else { continue };
             let Some(entry) = catalog.items_by_id.get(&item_id) else { continue };
+            let boost = if entry.gold_total >= 2000 { 0.25 } else { 0.15 };
 
-            threat.healing |= entry.signals.healing_item;
-            threat.crit |= entry.signals.crit_item;
-            threat.autoattack |= entry.signals.attack_speed_item || entry.signals.crit_item;
-            threat.on_hit |= entry.signals.on_hit_item;
-            threat.magic_damage |= entry.signals.ap_item && !entry.signals.ad_item;
-            threat.physical_damage |= entry.signals.ad_item;
-            threat.tanky |= entry.signals.tank_item;
+            if entry.signals.healing_item { threat.healing = (threat.healing + boost).min(1.0); }
+            if entry.signals.crit_item { threat.crit = (threat.crit + boost).min(1.0); }
+            if entry.signals.attack_speed_item || entry.signals.crit_item {
+                threat.autoattack = (threat.autoattack + boost).min(1.0);
+            }
+            if entry.signals.on_hit_item { threat.on_hit = (threat.on_hit + boost).min(1.0); }
+            if entry.signals.ap_item && !entry.signals.ad_item {
+                threat.magic_damage = (threat.magic_damage + boost).min(1.0);
+                threat.ap_burst = (threat.ap_burst + boost * 0.5).min(1.0);
+            }
+            if entry.signals.ad_item {
+                threat.physical_damage = (threat.physical_damage + boost).min(1.0);
+            }
+            if entry.signals.tank_item {
+                threat.tanky = (threat.tanky + boost).min(1.0);
+            }
         }
     }
 
-    if threat.crit {
-        threat.autoattack = true;
-        threat.physical_damage = true;
+    if threat.crit > 0.3 {
+        threat.autoattack = threat.autoattack.max(threat.crit);
+        threat.physical_damage = threat.physical_damage.max(threat.crit * 0.8);
     }
 
     threat
@@ -552,21 +626,24 @@ fn choose_counter_item(
     buyer: &BuyerProfile,
     threat: &ThreatProfile,
     owned_item_ids: &HashSet<i32>,
+    enemy_champion_name: &str,
     game_time: Option<i64>,
 ) -> Option<CounterItemSuggestion> {
-    let mut best: Option<(i32, usize, &ItemAdvisorEntry, String)> = None;
+    let mut best: Option<(i32, usize, &ItemAdvisorEntry, String, Option<String>)> = None;
 
     for item in candidates {
         if owned_item_ids.contains(&item.id) {
             continue;
         }
 
-        let Some((score, reason_weight, reason)) = score_counter_item(item, buyer, threat, game_time) else {
+        let Some((score, reason_weight, counter_reason, build_reason)) =
+            score_counter_item(item, buyer, threat, enemy_champion_name, game_time)
+        else {
             continue;
         };
 
         match best {
-            Some((best_score, best_reason_weight, best_item, _)) => {
+            Some((best_score, best_reason_weight, best_item, _, _)) => {
                 let replace = score > best_score
                     || (score == best_score && reason_weight > best_reason_weight)
                     || (score == best_score
@@ -574,14 +651,14 @@ fn choose_counter_item(
                         && item.gold_total < best_item.gold_total);
 
                 if replace {
-                    best = Some((score, reason_weight, item, reason));
+                    best = Some((score, reason_weight, item, counter_reason, build_reason));
                 }
             }
-            None => best = Some((score, reason_weight, item, reason)),
+            None => best = Some((score, reason_weight, item, counter_reason, build_reason)),
         }
     }
 
-    let (best_score, _, best_item, reason) = best?;
+    let (best_score, _, best_item, counter_reason, build_reason) = best?;
     if best_score < 6 {
         return None;
     }
@@ -589,7 +666,8 @@ fn choose_counter_item(
     Some(CounterItemSuggestion {
         item_id: best_item.id,
         name: best_item.name.clone(),
-        reason,
+        build_reason,
+        counter_reason,
     })
 }
 
@@ -597,9 +675,10 @@ fn score_counter_item(
     item: &ItemAdvisorEntry,
     buyer: &BuyerProfile,
     threat: &ThreatProfile,
+    enemy_champion_name: &str,
     game_time: Option<i64>,
-) -> Option<(i32, usize, String)> {
-    let fit = buyer_fit_score(buyer, &item.signals);
+) -> Option<(i32, usize, String, Option<String>)> {
+    let (fit, build_reason) = buyer_fit_score(buyer, &item.signals);
     if fit <= -6 {
         return None;
     }
@@ -608,71 +687,81 @@ fn score_counter_item(
     let mut reason = String::from("ситуативный контр-предмет");
     let mut reason_weight = 0usize;
 
-    let mut apply_reason = |delta: i32, weight: usize, message: &str| {
+    let enemy = if enemy_champion_name.is_empty() { "" } else { enemy_champion_name };
+
+    let mut apply_reason = |intensity: f32, base_delta: i32, weight: usize, message: &str| {
+        if intensity <= 0.0 {
+            return;
+        }
+        let delta = (base_delta as f32 * intensity).round() as i32;
         score += delta;
         if weight > reason_weight {
             reason_weight = weight;
-            reason = message.to_string();
+            if enemy.is_empty() {
+                reason = message.to_string();
+            } else {
+                reason = format!("{} ({})", message, enemy);
+            }
         }
     };
 
-    if threat.healing && item.signals.anti_heal {
-        apply_reason(8, 8, "антихил против лечения");
+    if item.signals.anti_heal {
+        apply_reason(threat.healing, 8, 8, "антихил против лечения");
     }
-    if threat.shields && item.signals.anti_shield {
-        apply_reason(8, 8, "контр предмет против щитов");
+    if item.signals.anti_shield {
+        apply_reason(threat.shields, 8, 8, "контр предмет против щитов");
     }
-    if threat.crit && item.signals.anti_crit {
-        apply_reason(7, 7, "снижает давление от крит-урона");
+    if item.signals.anti_crit {
+        apply_reason(threat.crit, 7, 7, "снижает давление от крит-урона");
     }
-    if threat.hard_cc {
+    if threat.hard_cc > 0.0 {
         if item.signals.cc_cleanse {
-            apply_reason(8, 8, "снимает опасный контроль");
+            apply_reason(threat.hard_cc, 8, 8, "снимает опасный контроль");
         } else if item.signals.spell_block {
-            apply_reason(7, 7, "блокирует ключевой контроль");
+            apply_reason(threat.hard_cc, 7, 7, "блокирует ключевой контроль");
         } else if item.signals.magic_resist {
-            apply_reason(3, 3, "даёт запас против магии и контроля");
+            apply_reason(threat.hard_cc, 3, 3, "даёт запас против магии и контроля");
         }
     }
-    if threat.ap_burst {
+    if threat.ap_burst > 0.0 {
         if item.signals.spell_block {
-            apply_reason(8, 8, "защищает от магического прокаста");
+            apply_reason(threat.ap_burst, 8, 8, "защищает от магического прокаста");
         } else if item.signals.burst_protection {
-            apply_reason(6, 6, "переживает магический прокаст");
+            apply_reason(threat.ap_burst, 6, 6, "переживает магический прокаст");
         } else if item.signals.magic_resist {
-            apply_reason(5, 5, "даёт магрез против AP-урона");
+            apply_reason(threat.ap_burst, 5, 5, "даёт магрез против AP-урона");
         }
     }
-    if threat.ad_burst {
+    if threat.ad_burst > 0.0 {
         if item.signals.burst_protection {
-            apply_reason(6, 6, "помогает пережить burst");
+            apply_reason(threat.ad_burst, 6, 6, "помогает пережить burst");
         }
         if item.signals.armor {
-            apply_reason(5, 5, "даёт броню против AD-урона");
+            apply_reason(threat.ad_burst, 5, 5, "даёт броню против AD-урона");
         }
     }
-    if threat.autoattack {
+    if threat.autoattack > 0.0 {
         if item.signals.anti_dps {
-            apply_reason(6, 6, "срезает урон от автоатак");
+            apply_reason(threat.autoattack, 6, 6, "срезает урон от автоатак");
         } else if item.signals.armor {
-            apply_reason(3, 3, "даёт броню против автоатак");
+            apply_reason(threat.autoattack, 3, 3, "даёт броню против автоатак");
         }
     }
-    if threat.on_hit {
+    if threat.on_hit > 0.0 {
         if item.signals.anti_dps {
-            apply_reason(5, 5, "мешает on-hit/DPS урону");
+            apply_reason(threat.on_hit, 5, 5, "мешает on-hit/DPS урону");
         } else if item.signals.armor {
-            apply_reason(2, 2, "даёт броню против DPS");
+            apply_reason(threat.on_hit, 2, 2, "даёт броню против DPS");
         }
     }
-    if threat.tanky && item.signals.anti_tank {
-        apply_reason(7, 7, "лучше пробивает плотную цель");
+    if item.signals.anti_tank {
+        apply_reason(threat.tanky, 7, 7, "лучше пробивает плотную цель");
     }
-    if threat.magic_damage && item.signals.magic_resist {
-        apply_reason(2, 2, "добавляет магрез");
+    if item.signals.magic_resist {
+        apply_reason(threat.magic_damage, 2, 2, "добавляет магрез");
     }
-    if threat.physical_damage && item.signals.armor {
-        apply_reason(2, 2, "добавляет броню");
+    if item.signals.armor {
+        apply_reason(threat.physical_damage, 2, 2, "добавляет броню");
     }
 
     let cost_penalty = match game_time.unwrap_or_default() {
@@ -686,15 +775,18 @@ fn score_counter_item(
         return None;
     }
 
-    Some((score, reason_weight, reason))
+    Some((score, reason_weight, reason, build_reason))
 }
 
-fn buyer_fit_score(buyer: &BuyerProfile, signals: &ItemSignals) -> i32 {
-    let mut score = 0;
+fn buyer_fit_score(buyer: &BuyerProfile, signals: &ItemSignals) -> (i32, Option<String>) {
+    let mut score = 0i32;
+    let mut label: Option<&str> = None;
 
-    if buyer.marksman {
+    // Marksman: strongly prefers AD, rejects AP/tank
+    if buyer.is_marksman {
         if signals.ad_item {
             score += 5;
+            label = Some("предмет для стрелка");
         }
         if signals.ap_item && !signals.ad_item {
             score -= 8;
@@ -702,52 +794,41 @@ fn buyer_fit_score(buyer: &BuyerProfile, signals: &ItemSignals) -> i32 {
         if signals.tank_item {
             score -= 5;
         }
-        return score;
+        let reason = if score > 3 { label.map(String::from) } else { None };
+        return (score, reason);
     }
 
-    if buyer.ap && !buyer.fighter {
-        if signals.ap_item {
-            score += 5;
-        }
-        if signals.ad_item && !signals.ap_item {
-            score -= 8;
-        }
-        if signals.tank_item && !signals.ap_item {
-            score -= 5;
-        }
-    }
-
-    if buyer.fighter {
-        if signals.ad_item {
-            score += 4;
-        }
-        if signals.armor || signals.magic_resist || signals.tank_item {
-            score += 2;
-        }
-        if signals.ap_item && !signals.ad_item {
-            score -= 7;
+    // Weight-based scoring
+    if signals.ap_item {
+        let delta = (5.0 * buyer.ap_weight - 6.0 * buyer.ad_weight).round() as i32;
+        score += delta;
+        if buyer.ap_weight > 0.4 && delta > 0 {
+            label = Some("вписывается в AP-билд");
         }
     }
 
-    if buyer.tank {
-        if signals.tank_item || signals.armor || signals.magic_resist || signals.mixed_defense {
-            score += 5;
-        }
-        if signals.ad_item && !signals.tank_item {
-            score -= 5;
-        }
-        if signals.ap_item && !signals.tank_item {
-            score -= 5;
+    if signals.ad_item && !signals.ap_item {
+        let delta = (5.0 * buyer.ad_weight - 6.0 * buyer.ap_weight).round() as i32;
+        score += delta;
+        if buyer.ad_weight > 0.4 && delta > 0 {
+            label = Some("вписывается в AD-билд");
         }
     }
 
-    if !buyer.ap && !buyer.ad && !buyer.tank {
-        if signals.ad_item {
-            score += 2;
+    if signals.tank_item || signals.armor || signals.magic_resist {
+        let delta = (4.0 * buyer.tank_weight).round() as i32;
+        score += delta;
+        if buyer.tank_weight > 0.4 && delta > 0 && label.is_none() {
+            label = Some("подходит танковому билду");
+        }
+        // Penalize tank items for pure damage dealers
+        if buyer.tank_weight < 0.1 && !signals.ad_item && !signals.ap_item {
+            score -= 4;
         }
     }
 
-    score
+    let reason = if score > 2 { label.map(String::from) } else { None };
+    (score, reason)
 }
 
 fn item_tags(info: &serde_json::Value) -> Vec<String> {
@@ -866,6 +947,48 @@ mod tests {
         }
     }
 
+    fn empty_player() -> lcu::LiveFullPlayer {
+        lcu::LiveFullPlayer {
+            champion_name: None,
+            team: None,
+            position: None,
+            level: None,
+            scores: None,
+            items: None,
+            summoner_name: None,
+            riot_id_game_name: None,
+            riot_id_tag_line: None,
+            summoner_spells: None,
+            is_dead: None,
+            respawn_timer: None,
+            runes: None,
+        }
+    }
+
+    fn player_with_items(item_ids: &[i32]) -> lcu::LiveFullPlayer {
+        let mut p = empty_player();
+        p.items = Some(
+            item_ids
+                .iter()
+                .map(|&id| lcu::LiveItem {
+                    item_id: Some(id),
+                    display_name: None,
+                    count: Some(1),
+                    price: None,
+                })
+                .collect(),
+        );
+        p
+    }
+
+    fn empty_catalog() -> ItemCatalogSnapshot {
+        ItemCatalogSnapshot::default()
+    }
+
+    fn buyer_from_meta(meta: &ChampionMetaInfo) -> BuyerProfile {
+        derive_buyer_profile(&empty_player(), Some(meta), &empty_catalog())
+    }
+
     #[test]
     fn filters_out_boots_and_special_items() {
         let boots = test_item(serde_json::json!({
@@ -914,10 +1037,10 @@ mod tests {
 
     #[test]
     fn mage_prefers_zhonya_into_ad_burst() {
-        let buyer = derive_buyer_profile(Some(&champ_meta(&["Mage"], "Deals magic damage.")));
+        let buyer = buyer_from_meta(&champ_meta(&["Mage"], "Deals magic damage."));
         let threat = ThreatProfile {
-            ad_burst: true,
-            physical_damage: true,
+            ad_burst: 0.8,
+            physical_damage: 0.7,
             ..ThreatProfile::default()
         };
         let zhonya = candidate_entry(
@@ -944,14 +1067,14 @@ mod tests {
             3000,
         );
 
-        let suggestion = choose_counter_item(&[zhonya, randuin], &buyer, &threat, &HashSet::new(), Some(1200))
+        let suggestion = choose_counter_item(&[zhonya, randuin], &buyer, &threat, &HashSet::new(), "Zed", Some(1200))
             .expect("expected a recommendation");
         assert_eq!(suggestion.item_id, 3157);
     }
 
     #[test]
     fn returns_none_when_signal_is_too_weak() {
-        let buyer = derive_buyer_profile(Some(&champ_meta(&["Mage"], "Deals magic damage.")));
+        let buyer = buyer_from_meta(&champ_meta(&["Mage"], "Deals magic damage."));
         let threat = ThreatProfile::default();
         let generic_ap = candidate_entry(
             3089,
@@ -963,14 +1086,14 @@ mod tests {
             3600,
         );
 
-        assert!(choose_counter_item(&[generic_ap], &buyer, &threat, &HashSet::new(), Some(1200)).is_none());
+        assert!(choose_counter_item(&[generic_ap], &buyer, &threat, &HashSet::new(), "", Some(1200)).is_none());
     }
 
     #[test]
     fn allows_reasonable_general_counter_instead_of_question_mark() {
-        let buyer = derive_buyer_profile(Some(&champ_meta(&["Mage"], "Deals magic damage.")));
+        let buyer = buyer_from_meta(&champ_meta(&["Mage"], "Deals magic damage."));
         let threat = ThreatProfile {
-            magic_damage: true,
+            magic_damage: 0.6,
             ..ThreatProfile::default()
         };
         let banshee = candidate_entry(
@@ -986,8 +1109,100 @@ mod tests {
             3100,
         );
 
-        let suggestion = choose_counter_item(&[banshee], &buyer, &threat, &HashSet::new(), Some(1200))
+        let suggestion = choose_counter_item(&[banshee], &buyer, &threat, &HashSet::new(), "", Some(1200))
             .expect("expected a softer fallback recommendation");
         assert_eq!(suggestion.item_id, 3102);
+    }
+
+    #[test]
+    fn buyer_profile_from_items_overrides_meta() {
+        // AP champion who bought AD items should get AD-weighted profile
+        let mut catalog = empty_catalog();
+        let ad_entry = ItemAdvisorEntry {
+            id: 3031,
+            name: "Infinity Edge".to_string(),
+            gold_total: 3400,
+            signals: ItemSignals { ad_item: true, crit_item: true, ..ItemSignals::default() },
+        };
+        catalog.items_by_id.insert(3031, ad_entry);
+        let ad_entry2 = ItemAdvisorEntry {
+            id: 3036,
+            name: "Lord Dominik's".to_string(),
+            gold_total: 3000,
+            signals: ItemSignals { ad_item: true, anti_tank: true, ..ItemSignals::default() },
+        };
+        catalog.items_by_id.insert(3036, ad_entry2);
+
+        let player = player_with_items(&[3031, 3036]);
+        let meta = champ_meta(&["Mage"], "Deals magic damage.");
+        let buyer = derive_buyer_profile(&player, Some(&meta), &catalog);
+
+        // Even though meta says Mage, items say AD
+        assert!(buyer.ad_weight > 0.5, "ad_weight should be high: {}", buyer.ad_weight);
+        assert!(buyer.ap_weight < 0.1, "ap_weight should be low: {}", buyer.ap_weight);
+    }
+
+    #[test]
+    fn threat_intensity_scales_with_items() {
+        let meta = champ_meta(&["Marksman"], "Deals physical damage with basic attacks and critical strikes.");
+        let mut catalog = empty_catalog();
+        let crit1 = ItemAdvisorEntry {
+            id: 3031,
+            name: "IE".to_string(),
+            gold_total: 3400,
+            signals: ItemSignals { ad_item: true, crit_item: true, ..ItemSignals::default() },
+        };
+        let crit2 = ItemAdvisorEntry {
+            id: 3094,
+            name: "RFC".to_string(),
+            gold_total: 2800,
+            signals: ItemSignals { attack_speed_item: true, crit_item: true, ..ItemSignals::default() },
+        };
+        catalog.items_by_id.insert(3031, crit1);
+        catalog.items_by_id.insert(3094, crit2);
+
+        // With 0 items
+        let player_no_items = empty_player();
+        let threat_low = derive_enemy_threat(&player_no_items, Some(&meta), &catalog);
+
+        // With 2 crit items
+        let player_crit = player_with_items(&[3031, 3094]);
+        let threat_high = derive_enemy_threat(&player_crit, Some(&meta), &catalog);
+
+        assert!(threat_high.crit > threat_low.crit,
+            "crit with items ({}) should be > without ({})", threat_high.crit, threat_low.crit);
+        assert!(threat_high.autoattack > threat_low.autoattack,
+            "autoattack with items ({}) should be > without ({})", threat_high.autoattack, threat_low.autoattack);
+    }
+
+    #[test]
+    fn suggestion_has_both_reasons() {
+        let buyer = BuyerProfile {
+            ap_weight: 0.8,
+            ad_weight: 0.0,
+            tank_weight: 0.0,
+            is_marksman: false,
+        };
+        let threat = ThreatProfile {
+            healing: 0.9,
+            ..ThreatProfile::default()
+        };
+        let morello = candidate_entry(
+            3165,
+            "Morellonomicon",
+            ItemSignals {
+                ap_item: true,
+                anti_heal: true,
+                ..ItemSignals::default()
+            },
+            3000,
+        );
+
+        let suggestion = choose_counter_item(&[morello], &buyer, &threat, &HashSet::new(), "Aatrox", Some(1200))
+            .expect("expected a recommendation");
+        assert!(suggestion.counter_reason.contains("Aatrox"),
+            "counter_reason should mention enemy name: {}", suggestion.counter_reason);
+        assert!(suggestion.build_reason.is_some(),
+            "build_reason should be set for matching AP item with AP buyer");
     }
 }

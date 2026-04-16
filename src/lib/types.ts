@@ -213,7 +213,8 @@ export interface GoldComparisonData {
 export interface CounterItemSuggestion {
   itemId: number;
   name: string;
-  reason: string;
+  buildReason: string | null;
+  counterReason: string;
 }
 
 export interface LaneGoldComparison {
