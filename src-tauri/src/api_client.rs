@@ -6,6 +6,8 @@ use leagueeye_shared::models::*;
 /// Replaces direct Riot API calls in the client.
 pub struct ServerApiClient {
     client: Client,
+    /// Separate client for SSE streaming requests (no overall timeout).
+    stream_client: Client,
     base_url: String,
 }
 
@@ -13,6 +15,7 @@ impl Clone for ServerApiClient {
     fn clone(&self) -> Self {
         Self {
             client: self.client.clone(),
+            stream_client: self.stream_client.clone(),
             base_url: self.base_url.clone(),
         }
     }
@@ -20,14 +23,22 @@ impl Clone for ServerApiClient {
 
 impl ServerApiClient {
     pub fn new(base_url: String) -> Self {
+        let accept_invalid = base_url.starts_with("https://");
         let client = Client::builder()
-            .danger_accept_invalid_certs(base_url.starts_with("https://"))
+            .danger_accept_invalid_certs(accept_invalid)
             .timeout(std::time::Duration::from_secs(10))
+            .pool_idle_timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_default();
+        let stream_client = Client::builder()
+            .danger_accept_invalid_certs(accept_invalid)
+            .connect_timeout(std::time::Duration::from_secs(10))
             .pool_idle_timeout(std::time::Duration::from_secs(30))
             .build()
             .unwrap_or_default();
         Self {
             client,
+            stream_client,
             base_url: base_url.trim_end_matches('/').to_string(),
         }
     }
@@ -143,7 +154,7 @@ impl ServerApiClient {
     ) -> Result<(), String> {
         let url = format!("{}/api/coach/stream", self.base_url);
 
-        let response = self.client
+        let response = self.stream_client
             .post(&url)
             .json(ctx)
             .send()
@@ -230,7 +241,7 @@ impl ServerApiClient {
     ) -> Result<(), String> {
         let url = format!("{}/api/coach/stream", self.base_url);
 
-        let response = self.client
+        let response = self.stream_client
             .post(&url)
             .json(ctx)
             .send()
@@ -334,7 +345,7 @@ impl ServerApiClient {
             "forceRefresh": force_refresh,
         });
 
-        let response = self.client
+        let response = self.stream_client
             .post(&url)
             .json(&body)
             .send()
