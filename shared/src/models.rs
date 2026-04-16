@@ -646,7 +646,7 @@ pub struct CoachingContext {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct CoachStreamPayload {
-    pub kind: String, // "start" | "delta" | "end" | "error" | "cached"
+    pub kind: String, // "start" | "delta" | "end" | "error" | "cached" | "pending"
     pub text: Option<String>,
 }
 
@@ -667,7 +667,10 @@ pub struct PostGameReview {
     pub match_id: String,
     pub puuid: String,
     pub review_text: String,
+    pub status: String,
+    pub error_text: Option<String>,
     pub created_at: i64,
+    pub updated_at: i64,
 }
 
 // --- Match Timeline (Riot API v5) ---

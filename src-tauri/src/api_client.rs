@@ -423,9 +423,10 @@ impl ServerApiClient {
                             "end" => "review-end",
                             "error" => "review-error",
                             "cached" => "review-cached",
+                            "pending" => "review-pending",
                             other => other,
                         };
-                        if matches!(payload.kind.as_str(), "end" | "error" | "cached") {
+                        if matches!(payload.kind.as_str(), "end" | "error" | "cached" | "pending") {
                             got_end = true;
                         }
                         emit_review_stream(app, review_kind, payload.text, request_id);

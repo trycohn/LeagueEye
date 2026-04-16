@@ -7,6 +7,7 @@ use futures::stream::Stream;
 use leagueeye_shared::models::*;
 use std::sync::Arc;
 
+use crate::db::ReviewGenerationClaim;
 use crate::AppState;
 use crate::item_catalog::ItemCatalog;
 use crate::champion_catalog::ChampionCatalog;
@@ -20,13 +21,28 @@ pub async fn stream_review(
 ) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
     let config = state.ai_coach_config.clone();
 
-    // Check for cached review (unless force_refresh)
-    if !req.force_refresh {
-        if let Ok(Some(review)) = state.db.get_review(&req.match_id, &req.puuid).await {
+    if req.force_refresh {
+        if let Err(e) = state.db.delete_review(&req.match_id, &req.puuid).await {
+            return Sse::new(make_error_stream(&format!("Ошибка удаления старого разбора: {}", e)));
+        }
+    }
+
+    match state.db.claim_review_generation(&req.match_id, &req.puuid).await {
+        Ok(ReviewGenerationClaim::Cached(review)) => {
             return Sse::new(make_cached_stream(review.review_text));
         }
-    } else if let Err(e) = state.db.delete_review(&req.match_id, &req.puuid).await {
-        return Sse::new(make_error_stream(&format!("Ошибка удаления старого разбора: {}", e)));
+        Ok(ReviewGenerationClaim::Pending(_)) => {
+            return Sse::new(make_pending_stream("Разбор уже генерируется для этого игрока"));
+        }
+        Ok(ReviewGenerationClaim::Failed(review)) if !req.force_refresh => {
+            return Sse::new(make_error_stream(
+                review.error_text.as_deref().unwrap_or("Предыдущий разбор завершился с ошибкой"),
+            ));
+        }
+        Ok(ReviewGenerationClaim::Started) | Ok(ReviewGenerationClaim::Failed(_)) => {}
+        Err(e) => {
+            return Sse::new(make_error_stream(&format!("Ошибка БД: {}", e)));
+        }
     }
 
     // Load catalogs
@@ -43,13 +59,25 @@ pub async fn stream_review(
                     let _ = state.db.save_match_participants(&dto.metadata.match_id, &parts).await;
                     match state.db.get_match_detail(&req.match_id).await {
                         Ok(Some(d)) => d,
-                        _ => return Sse::new(make_error_stream("Не удалось загрузить детали матча")),
+                        _ => {
+                            let msg = "Не удалось загрузить детали матча";
+                            let _ = state.db.fail_review(&req.match_id, &req.puuid, "", msg).await;
+                            return Sse::new(make_error_stream(msg));
+                        }
                     }
                 }
-                Err(e) => return Sse::new(make_error_stream(&format!("Ошибка загрузки матча: {}", e))),
+                Err(e) => {
+                    let msg = format!("Ошибка загрузки матча: {}", e);
+                    let _ = state.db.fail_review(&req.match_id, &req.puuid, "", &msg).await;
+                    return Sse::new(make_error_stream(&msg));
+                }
             }
         }
-        Err(e) => return Sse::new(make_error_stream(&format!("Ошибка БД: {}", e))),
+        Err(e) => {
+            let msg = format!("Ошибка БД: {}", e);
+            let _ = state.db.fail_review(&req.match_id, &req.puuid, "", &msg).await;
+            return Sse::new(make_error_stream(&msg));
+        }
     };
 
     // Load timeline (cached or from Riot API)
@@ -500,6 +528,18 @@ fn make_error_stream(msg: &str) -> std::pin::Pin<Box<dyn Stream<Item = Result<Ev
     })
 }
 
+fn make_pending_stream(msg: &str) -> std::pin::Pin<Box<dyn Stream<Item = Result<Event, std::convert::Infallible>> + Send>> {
+    let msg = msg.to_string();
+    Box::pin(async_stream::stream! {
+        yield Ok(Event::default().data(
+            serde_json::to_string(&CoachStreamPayload {
+                kind: "pending".to_string(),
+                text: Some(msg),
+            }).unwrap()
+        ));
+    })
+}
+
 fn make_review_stream(
     config: Option<crate::AiCoachConfig>,
     system_prompt: String,
@@ -522,10 +562,31 @@ fn make_review_stream(
                 }
             }
 
-            if payload.kind == "end" && !collected_text.is_empty() {
-                if let Err(e) = db.save_review(&match_id, &puuid, &collected_text).await {
+            if payload.kind == "end" {
+                let save_result = if collected_text.is_empty() {
+                    db.fail_review(&match_id, &puuid, "", "AI вернул пустой разбор").await
+                } else {
+                    db.save_review(&match_id, &puuid, &collected_text).await
+                };
+
+                if let Err(e) = save_result {
                     log::error!(
-                        "[review] Failed to save review for match {} / puuid {}: {}",
+                        "[review] Failed to finalize review for match {} / puuid {}: {}",
+                        match_id,
+                        puuid,
+                        e
+                    );
+                }
+            }
+
+            if payload.kind == "error" {
+                let error_text = payload
+                    .text
+                    .as_deref()
+                    .unwrap_or("AI разбор завершился с ошибкой");
+                if let Err(e) = db.fail_review(&match_id, &puuid, &collected_text, error_text).await {
+                    log::error!(
+                        "[review] Failed to persist review error for match {} / puuid {}: {}",
                         match_id,
                         puuid,
                         e

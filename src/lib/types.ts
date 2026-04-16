@@ -186,12 +186,12 @@ export interface GlobalDashboardData {
 // --- AI Coach ---
 
 export interface CoachStreamPayload {
-  kind: "start" | "delta" | "end" | "error" | "cached" | "draft-start" | "draft-delta" | "draft-end" | "draft-error" | "review-start" | "review-delta" | "review-end" | "review-error" | "review-cached";
+  kind: "start" | "delta" | "end" | "error" | "cached" | "pending" | "draft-start" | "draft-delta" | "draft-end" | "draft-error" | "review-start" | "review-delta" | "review-end" | "review-error" | "review-cached" | "review-pending";
   text: string | null;
 }
 
 export interface ReviewStreamPayload {
-  kind: "review-start" | "review-delta" | "review-end" | "review-error" | "review-cached";
+  kind: "review-start" | "review-delta" | "review-end" | "review-error" | "review-cached" | "review-pending";
   text: string | null;
   requestId: string;
 }
@@ -207,7 +207,10 @@ export interface PostGameReview {
   matchId: string;
   puuid: string;
   reviewText: string;
+  status: "generating" | "ready" | "failed";
+  errorText: string | null;
   createdAt: number;
+  updatedAt: number;
 }
 
 // --- Draft Helper ---

@@ -1,6 +1,32 @@
 use sqlx::PgPool;
 use leagueeye_shared::models::*;
 
+const REVIEW_GENERATING_TTL_SECS: i64 = 300;
+
+type ReviewRow = (String, String, String, String, Option<String>, i64, i64);
+
+#[derive(Debug, Clone)]
+pub enum ReviewGenerationClaim {
+    Started,
+    Cached(PostGameReview),
+    Pending(PostGameReview),
+    Failed(PostGameReview),
+}
+
+fn map_review_row(
+    (match_id, puuid, review_text, status, error_text, created_at, updated_at): ReviewRow,
+) -> PostGameReview {
+    PostGameReview {
+        match_id,
+        puuid,
+        review_text,
+        status,
+        error_text,
+        created_at,
+        updated_at,
+    }
+}
+
 #[derive(Clone)]
 pub struct Db {
     pool: PgPool,
@@ -425,32 +451,168 @@ impl Db {
     // --- Match Reviews ---
 
     pub async fn get_review(&self, match_id: &str, puuid: &str) -> Result<Option<PostGameReview>, sqlx::Error> {
-        let row: Option<(String, String, String, i64)> = sqlx::query_as(
-            "SELECT match_id, puuid, review_text, created_at FROM match_reviews WHERE match_id = $1 AND puuid = $2"
+        let row: Option<ReviewRow> = sqlx::query_as(
+            "SELECT match_id, puuid, review_text, status, error_text, created_at, updated_at
+             FROM match_reviews WHERE match_id = $1 AND puuid = $2"
         )
         .bind(match_id)
         .bind(puuid)
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(row.map(|(match_id, puuid, review_text, created_at)| PostGameReview {
-            match_id,
-            puuid,
-            review_text,
-            created_at,
-        }))
+        Ok(row.map(map_review_row))
+    }
+
+    pub async fn claim_review_generation(
+        &self,
+        match_id: &str,
+        puuid: &str,
+    ) -> Result<ReviewGenerationClaim, sqlx::Error> {
+        let now = now_ms() / 1000;
+        let stale_cutoff = now - REVIEW_GENERATING_TTL_SECS;
+        let mut tx = self.pool.begin().await?;
+
+        let existing: Option<ReviewRow> = sqlx::query_as(
+            "SELECT match_id, puuid, review_text, status, error_text, created_at, updated_at
+             FROM match_reviews WHERE match_id = $1 AND puuid = $2 FOR UPDATE"
+        )
+        .bind(match_id)
+        .bind(puuid)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        if let Some(row) = existing {
+            let review = map_review_row(row);
+            match review.status.as_str() {
+                "ready" => {
+                    tx.commit().await?;
+                    return Ok(ReviewGenerationClaim::Cached(review));
+                }
+                "generating" if review.updated_at >= stale_cutoff => {
+                    tx.commit().await?;
+                    return Ok(ReviewGenerationClaim::Pending(review));
+                }
+                "failed" => {
+                    tx.commit().await?;
+                    return Ok(ReviewGenerationClaim::Failed(review));
+                }
+                _ => {
+                    sqlx::query(
+                        "UPDATE match_reviews
+                         SET review_text = '', status = 'generating', error_text = NULL,
+                             created_at = $3, updated_at = $3
+                         WHERE match_id = $1 AND puuid = $2"
+                    )
+                    .bind(match_id)
+                    .bind(puuid)
+                    .bind(now)
+                    .execute(&mut *tx)
+                    .await?;
+                    tx.commit().await?;
+                    return Ok(ReviewGenerationClaim::Started);
+                }
+            }
+        }
+
+        let inserted = sqlx::query(
+            "INSERT INTO match_reviews (match_id, puuid, review_text, status, error_text, created_at, updated_at)
+             VALUES ($1, $2, '', 'generating', NULL, $3, $3)
+             ON CONFLICT (match_id, puuid) DO NOTHING"
+        )
+        .bind(match_id)
+        .bind(puuid)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+
+        if inserted.rows_affected() == 1 {
+            tx.commit().await?;
+            return Ok(ReviewGenerationClaim::Started);
+        }
+
+        let concurrent_row: ReviewRow = sqlx::query_as(
+            "SELECT match_id, puuid, review_text, status, error_text, created_at, updated_at
+             FROM match_reviews WHERE match_id = $1 AND puuid = $2 FOR UPDATE"
+        )
+        .bind(match_id)
+        .bind(puuid)
+        .fetch_one(&mut *tx)
+        .await?;
+        let review = map_review_row(concurrent_row);
+
+        match review.status.as_str() {
+            "ready" => {
+                tx.commit().await?;
+                Ok(ReviewGenerationClaim::Cached(review))
+            }
+            "generating" if review.updated_at >= stale_cutoff => {
+                tx.commit().await?;
+                Ok(ReviewGenerationClaim::Pending(review))
+            }
+            "failed" => {
+                tx.commit().await?;
+                Ok(ReviewGenerationClaim::Failed(review))
+            }
+            _ => {
+                sqlx::query(
+                    "UPDATE match_reviews
+                     SET review_text = '', status = 'generating', error_text = NULL,
+                         created_at = $3, updated_at = $3
+                     WHERE match_id = $1 AND puuid = $2"
+                )
+                .bind(match_id)
+                .bind(puuid)
+                .bind(now)
+                .execute(&mut *tx)
+                .await?;
+                tx.commit().await?;
+                Ok(ReviewGenerationClaim::Started)
+            }
+        }
     }
 
     pub async fn save_review(&self, match_id: &str, puuid: &str, text: &str) -> Result<(), sqlx::Error> {
         let now = now_ms() / 1000; // seconds
         sqlx::query(
-            "INSERT INTO match_reviews (match_id, puuid, review_text, created_at)
-             VALUES ($1, $2, $3, $4)
-             ON CONFLICT (match_id, puuid) DO UPDATE SET review_text = EXCLUDED.review_text, created_at = EXCLUDED.created_at"
+            "INSERT INTO match_reviews (match_id, puuid, review_text, status, error_text, created_at, updated_at)
+             VALUES ($1, $2, $3, 'ready', NULL, $4, $4)
+             ON CONFLICT (match_id, puuid) DO UPDATE SET
+                 review_text = EXCLUDED.review_text,
+                 status = 'ready',
+                 error_text = NULL,
+                 created_at = EXCLUDED.created_at,
+                 updated_at = EXCLUDED.updated_at"
         )
         .bind(match_id)
         .bind(puuid)
         .bind(text)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn fail_review(
+        &self,
+        match_id: &str,
+        puuid: &str,
+        partial_text: &str,
+        error_text: &str,
+    ) -> Result<(), sqlx::Error> {
+        let now = now_ms() / 1000;
+        sqlx::query(
+            "INSERT INTO match_reviews (match_id, puuid, review_text, status, error_text, created_at, updated_at)
+             VALUES ($1, $2, $3, 'failed', $4, $5, $5)
+             ON CONFLICT (match_id, puuid) DO UPDATE SET
+                 review_text = EXCLUDED.review_text,
+                 status = 'failed',
+                 error_text = EXCLUDED.error_text,
+                 updated_at = EXCLUDED.updated_at"
+        )
+        .bind(match_id)
+        .bind(puuid)
+        .bind(partial_text)
+        .bind(error_text)
         .bind(now)
         .execute(&self.pool)
         .await?;

@@ -43,16 +43,19 @@ export function PostGameReviewView({
     reviewText,
     currentStream,
     isStreaming,
+    isPending,
+    pendingMessage,
     error,
     reviewMatchId,
+    reviewPuuid,
+    ensureReview,
     requestReview,
-    clearReview,
   } = usePostGameReview();
 
   // Auto-request review when entering view
   useEffect(() => {
-    if (reviewMatchId !== matchId) {
-      requestReview(matchId, puuid);
+    if (reviewMatchId !== matchId || reviewPuuid !== puuid) {
+      void ensureReview(matchId, puuid);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matchId, puuid]);
@@ -75,10 +78,7 @@ export function PostGameReviewView({
   return (
     <div className="flex flex-col gap-5">
       <button
-        onClick={() => {
-          clearReview();
-          onBack();
-        }}
+        onClick={onBack}
         className="flex items-center gap-1 text-text-muted hover:text-text-primary text-sm transition-colors w-fit"
       >
         <ChevronLeft size={16} />
@@ -159,7 +159,7 @@ export function PostGameReviewView({
           <h3 className="text-sm font-semibold text-text-secondary uppercase tracking-wider">
             AI Разбор матча
           </h3>
-          {SHOW_REANALYZE_BUTTON && (reviewText || error) && !isStreaming && (
+          {SHOW_REANALYZE_BUTTON && (reviewText || error) && !isStreaming && !isPending && (
             <button
               onClick={() => requestReview(matchId, puuid, true)}
               className="flex items-center gap-1.5 text-xs text-text-muted hover:text-accent transition-colors"
@@ -171,10 +171,10 @@ export function PostGameReviewView({
           )}
         </div>
 
-        {isStreaming && !displayText && (
+        {(isStreaming || isPending) && !displayText && (
           <div className="flex items-center gap-2 text-text-muted text-sm py-4">
             <Loader2 size={16} className="animate-spin" />
-            Анализируем матч...
+            {isPending ? pendingMessage ?? "Разбор уже генерируется..." : "Анализируем матч..."}
           </div>
         )}
 
@@ -184,6 +184,12 @@ export function PostGameReviewView({
             {isStreaming && (
               <span className="inline-block w-1.5 h-4 bg-accent animate-pulse ml-0.5 align-middle" />
             )}
+          </div>
+        )}
+
+        {isPending && displayText && (
+          <div className="text-xs text-text-muted pt-3">
+            {pendingMessage ?? "Разбор уже генерируется..."}
           </div>
         )}
 
