@@ -10,7 +10,7 @@ mod overlay_policy;
 
 use ai_coach::CoachState;
 use api_client::ServerApiClient;
-use commands::{ChampionNamesCache, LastLiveState};
+use commands::{ChampionNamesCache, LastLiveState, ReviewStreamState, ReviewStreamStateHandle};
 use db::Db;
 use gold_counter::ItemCatalogCache;
 use std::sync::{Arc, Mutex};
@@ -426,6 +426,7 @@ pub fn run() {
         .manage(Arc::new(Mutex::new(ChampionNamesCache::new())))
         .manage(Arc::new(Mutex::new(ItemCatalogCache::new())))
         .manage(Arc::new(Mutex::new(LastLiveState::new())))
+        .manage(Arc::new(Mutex::new(ReviewStreamState::new())) as ReviewStreamStateHandle)
         .setup(|app| {
             {
                 let log_level = if cfg!(debug_assertions) {

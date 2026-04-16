@@ -457,6 +457,15 @@ impl Db {
         Ok(())
     }
 
+    pub async fn delete_review(&self, match_id: &str, puuid: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM match_reviews WHERE match_id = $1 AND puuid = $2")
+            .bind(match_id)
+            .bind(puuid)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     // --- Match Timelines ---
 
     pub async fn get_timeline(&self, match_id: &str) -> Result<Option<serde_json::Value>, sqlx::Error> {

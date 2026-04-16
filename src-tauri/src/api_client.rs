@@ -2,6 +2,39 @@ use reqwest::Client;
 use tauri::{AppHandle, Emitter};
 use leagueeye_shared::models::*;
 
+#[derive(Debug, serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewStreamPayload {
+    pub kind: String,
+    pub text: Option<String>,
+    pub request_id: String,
+}
+
+fn take_complete_lines(buffer: &mut Vec<u8>) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    while let Some(pos) = buffer.iter().position(|&byte| byte == b'\n') {
+        let mut line_bytes: Vec<u8> = buffer.drain(..=pos).collect();
+        if matches!(line_bytes.last(), Some(b'\n')) {
+            line_bytes.pop();
+        }
+        if matches!(line_bytes.last(), Some(b'\r')) {
+            line_bytes.pop();
+        }
+        lines.push(String::from_utf8_lossy(&line_bytes).into_owned());
+    }
+
+    lines
+}
+
+fn emit_review_stream(app: &AppHandle, kind: &str, text: Option<String>, request_id: &str) {
+    let _ = app.emit("review-stream", ReviewStreamPayload {
+        kind: kind.to_string(),
+        text,
+        request_id: request_id.to_string(),
+    });
+}
+
 /// HTTP client that talks to the LeagueEye server.
 /// Replaces direct Riot API calls in the client.
 pub struct ServerApiClient {
@@ -181,7 +214,7 @@ impl ServerApiClient {
 
         // Read SSE stream from server line-by-line and forward as Tauri events.
         // Using single-newline parsing to avoid buffering delays from waiting for "\n\n".
-        let mut buffer = String::new();
+        let mut buffer = Vec::new();
         let mut response = response;
         let mut got_end = false;
 
@@ -199,12 +232,9 @@ impl ServerApiClient {
                 }
             };
 
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            buffer.extend_from_slice(&chunk);
 
-            while let Some(pos) = buffer.find('\n') {
-                let line = buffer[..pos].trim_end().to_string();
-                buffer = buffer[pos + 1..].to_string();
-
+            for line in take_complete_lines(&mut buffer) {
                 if line.is_empty() || line.starts_with(':') {
                     continue;
                 }
@@ -266,7 +296,7 @@ impl ServerApiClient {
             return Err(msg);
         }
 
-        let mut buffer = String::new();
+        let mut buffer = Vec::new();
         let mut response = response;
         let mut got_end = false;
 
@@ -284,12 +314,9 @@ impl ServerApiClient {
                 }
             };
 
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            buffer.extend_from_slice(&chunk);
 
-            while let Some(pos) = buffer.find('\n') {
-                let line = buffer[..pos].trim_end().to_string();
-                buffer = buffer[pos + 1..].to_string();
-
+            for line in take_complete_lines(&mut buffer) {
                 if line.is_empty() || line.starts_with(':') {
                     continue;
                 }
@@ -336,6 +363,7 @@ impl ServerApiClient {
         match_id: &str,
         puuid: &str,
         force_refresh: bool,
+        request_id: &str,
     ) -> Result<(), String> {
         let url = format!("{}/api/review/stream", self.base_url);
 
@@ -352,10 +380,7 @@ impl ServerApiClient {
             .await
             .map_err(|e| {
                 let msg = format!("Ошибка соединения с сервером: {}", e);
-                let _ = app.emit("review-stream", CoachStreamPayload {
-                    kind: "error".to_string(),
-                    text: Some(msg.clone()),
-                });
+                emit_review_stream(app, "review-error", Some(msg.clone()), request_id);
                 msg
             })?;
 
@@ -363,14 +388,11 @@ impl ServerApiClient {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             let msg = format!("Ошибка сервера ({}): {}", status, body);
-            let _ = app.emit("review-stream", CoachStreamPayload {
-                kind: "error".to_string(),
-                text: Some(msg.clone()),
-            });
+            emit_review_stream(app, "review-error", Some(msg.clone()), request_id);
             return Err(msg);
         }
 
-        let mut buffer = String::new();
+        let mut buffer = Vec::new();
         let mut response = response;
         let mut got_end = false;
 
@@ -380,20 +402,14 @@ impl ServerApiClient {
                 Ok(None) => break,
                 Err(e) => {
                     let msg = format!("Ошибка чтения потока: {}", e);
-                    let _ = app.emit("review-stream", CoachStreamPayload {
-                        kind: "error".to_string(),
-                        text: Some(msg.clone()),
-                    });
+                    emit_review_stream(app, "review-error", Some(msg.clone()), request_id);
                     return Err(msg);
                 }
             };
 
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            buffer.extend_from_slice(&chunk);
 
-            while let Some(pos) = buffer.find('\n') {
-                let line = buffer[..pos].trim_end().to_string();
-                buffer = buffer[pos + 1..].to_string();
-
+            for line in take_complete_lines(&mut buffer) {
                 if line.is_empty() || line.starts_with(':') {
                     continue;
                 }
@@ -412,20 +428,14 @@ impl ServerApiClient {
                         if matches!(payload.kind.as_str(), "end" | "error" | "cached") {
                             got_end = true;
                         }
-                        let _ = app.emit("review-stream", CoachStreamPayload {
-                            kind: review_kind.to_string(),
-                            text: payload.text,
-                        });
+                        emit_review_stream(app, review_kind, payload.text, request_id);
                     }
                 }
             }
         }
 
         if !got_end {
-            let _ = app.emit("review-stream", CoachStreamPayload {
-                kind: "review-end".to_string(),
-                text: None,
-            });
+            emit_review_stream(app, "review-end", None, request_id);
         }
 
         Ok(())

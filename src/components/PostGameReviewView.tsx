@@ -19,6 +19,9 @@ const POSITION_LABEL: Record<string, string> = {
   UTILITY: "Support",
 };
 
+// Temporary test toggle. Set to false (or remove the block below) to hide re-analysis.
+const SHOW_REANALYZE_BUTTON = true;
+
 interface Props {
   matchId: string;
   puuid: string;
@@ -49,13 +52,12 @@ export function PostGameReviewView({
   // Auto-request review when entering view
   useEffect(() => {
     if (reviewMatchId !== matchId) {
-      clearReview();
       requestReview(matchId, puuid);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matchId, puuid]);
 
-  const displayText = reviewText || currentStream;
+  const displayText = isStreaming ? currentStream || reviewText : reviewText || currentStream;
   const m = matchSummary;
 
   const kda =
@@ -157,14 +159,14 @@ export function PostGameReviewView({
           <h3 className="text-sm font-semibold text-text-secondary uppercase tracking-wider">
             AI Разбор матча
           </h3>
-          {(reviewText || error) && !isStreaming && (
+          {SHOW_REANALYZE_BUTTON && (reviewText || error) && !isStreaming && (
             <button
               onClick={() => requestReview(matchId, puuid, true)}
               className="flex items-center gap-1.5 text-xs text-text-muted hover:text-accent transition-colors"
-              title="Перегенерировать разбор"
+              title="Удалить прошлый разбор и сгенерировать новый"
             >
               <RefreshCw size={12} />
-              Обновить
+              Проанализировать еще раз
             </button>
           )}
         </div>

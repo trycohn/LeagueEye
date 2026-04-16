@@ -190,6 +190,12 @@ export interface CoachStreamPayload {
   text: string | null;
 }
 
+export interface ReviewStreamPayload {
+  kind: "review-start" | "review-delta" | "review-end" | "review-error" | "review-cached";
+  text: string | null;
+  requestId: string;
+}
+
 export interface CoachMessage {
   text: string;
   timestamp: number;

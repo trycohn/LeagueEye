@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { CoachStreamPayload } from "../lib/types";
+import type { ReviewStreamPayload } from "../lib/types";
 
 // Module-level persistent state (survives remount)
 let persistedReviewText = "";
@@ -9,6 +9,7 @@ let persistedCurrentStream = "";
 let persistedIsStreaming = false;
 let persistedError: string | null = null;
 let persistedMatchId: string | null = null;
+let persistedActiveRequestId: string | null = null;
 
 let listenerActive = false;
 let onStateChange: (() => void) | null = null;
@@ -17,8 +18,12 @@ function ensureListener() {
   if (listenerActive) return;
   listenerActive = true;
 
-  listen<CoachStreamPayload>("review-stream", (event) => {
-    const { kind, text } = event.payload;
+  listen<ReviewStreamPayload>("review-stream", (event) => {
+    const { kind, text, requestId } = event.payload;
+
+    if (!persistedActiveRequestId || requestId !== persistedActiveRequestId) {
+      return;
+    }
 
     switch (kind) {
       case "review-start":
@@ -40,6 +45,7 @@ function ensureListener() {
           persistedReviewText = persistedCurrentStream;
         }
         persistedCurrentStream = "";
+        persistedActiveRequestId = null;
         break;
 
       case "review-cached":
@@ -47,12 +53,17 @@ function ensureListener() {
         persistedReviewText = text ?? "";
         persistedCurrentStream = "";
         persistedError = null;
+        persistedActiveRequestId = null;
         break;
 
       case "review-error":
         persistedIsStreaming = false;
         persistedError = text ?? "Неизвестная ошибка";
+        if (persistedCurrentStream) {
+          persistedReviewText = persistedCurrentStream;
+        }
         persistedCurrentStream = "";
+        persistedActiveRequestId = null;
         break;
     }
 
@@ -84,11 +95,14 @@ export function usePostGameReview() {
     async (matchId: string, puuid: string, forceRefresh = false) => {
       if (persistedIsStreaming) return;
 
+      const requestId = `${matchId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+
       persistedIsStreaming = true;
       persistedError = null;
       persistedCurrentStream = "";
       persistedReviewText = "";
       persistedMatchId = matchId;
+      persistedActiveRequestId = requestId;
       forceUpdate((n) => n + 1);
 
       try {
@@ -96,11 +110,13 @@ export function usePostGameReview() {
           matchId,
           puuid,
           forceRefresh,
+          requestId,
         });
       } catch (e) {
         persistedIsStreaming = false;
         persistedError = typeof e === "string" ? e : String(e);
         persistedCurrentStream = "";
+        persistedActiveRequestId = null;
         forceUpdate((n) => n + 1);
       }
     },
@@ -113,6 +129,7 @@ export function usePostGameReview() {
     persistedIsStreaming = false;
     persistedError = null;
     persistedMatchId = null;
+    persistedActiveRequestId = null;
     forceUpdate((n) => n + 1);
   }, []);
 

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::item_catalog::ItemCatalog;
 use crate::champion_catalog::ChampionCatalog;
-use crate::routes::coach::{make_ai_stream, load_catalogs};
+use crate::routes::coach::{load_catalogs, make_ai_payload_stream};
 
 // ─── POST /api/review/stream ────────────────────────────────────────────────
 
@@ -25,6 +25,8 @@ pub async fn stream_review(
         if let Ok(Some(review)) = state.db.get_review(&req.match_id, &req.puuid).await {
             return Sse::new(make_cached_stream(review.review_text));
         }
+    } else if let Err(e) = state.db.delete_review(&req.match_id, &req.puuid).await {
+        return Sse::new(make_error_stream(&format!("Ошибка удаления старого разбора: {}", e)));
     }
 
     // Load catalogs
@@ -507,19 +509,33 @@ fn make_review_stream(
     puuid: String,
 ) -> std::pin::Pin<Box<dyn Stream<Item = Result<Event, std::convert::Infallible>> + Send>> {
     Box::pin(async_stream::stream! {
-        let inner_stream = make_ai_stream(config, system_prompt, user_message);
-        let collected_text = String::new();
+        let inner_stream = make_ai_payload_stream(config, system_prompt, user_message);
+        let mut collected_text = String::new();
 
         use futures::StreamExt;
         let mut inner = std::pin::pin!(inner_stream);
 
-        while let Some(event_result) = inner.next().await {
-            yield event_result;
-        }
+        while let Some(payload) = inner.next().await {
+            if payload.kind == "delta" {
+                if let Some(text) = payload.text.as_deref() {
+                    collected_text.push_str(text);
+                }
+            }
 
-        // Since we can't easily extract from Event, save review via a separate mechanism.
-        // The review text collection needs to happen at the SSE data construction level.
-        // For now, skip caching during streaming and let the user re-request (which will be cached next time).
-        let _ = (db, match_id, puuid, collected_text);
+            if payload.kind == "end" && !collected_text.is_empty() {
+                if let Err(e) = db.save_review(&match_id, &puuid, &collected_text).await {
+                    log::error!(
+                        "[review] Failed to save review for match {} / puuid {}: {}",
+                        match_id,
+                        puuid,
+                        e
+                    );
+                }
+            }
+
+            yield Ok(Event::default().data(
+                serde_json::to_string(&payload).unwrap()
+            ));
+        }
     })
 }

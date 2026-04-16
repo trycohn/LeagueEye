@@ -29,6 +29,23 @@ const UNKNOWN_STAGE_FOCUS: &str =
 const UNKNOWN_STAGE_ANTI_REPEAT_RULE: &str =
     "Не повторяй один и тот же шаблонный совет без новой причины из данных";
 
+fn take_complete_lines(buffer: &mut Vec<u8>) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    while let Some(pos) = buffer.iter().position(|&byte| byte == b'\n') {
+        let mut line_bytes: Vec<u8> = buffer.drain(..=pos).collect();
+        if matches!(line_bytes.last(), Some(b'\n')) {
+            line_bytes.pop();
+        }
+        if matches!(line_bytes.last(), Some(b'\r')) {
+            line_bytes.pop();
+        }
+        lines.push(String::from_utf8_lossy(&line_bytes).into_owned());
+    }
+
+    lines
+}
+
 fn normalized_game_time_secs(game_time_secs: Option<i64>) -> Option<i64> {
     game_time_secs.filter(|secs| *secs >= 0)
 }
@@ -625,6 +642,7 @@ pub async fn stream_coach(
 }
 
 type CoachStream = Pin<Box<dyn Stream<Item = Result<Event, std::convert::Infallible>> + Send>>;
+type CoachPayloadStream = Pin<Box<dyn Stream<Item = CoachStreamPayload> + Send>>;
 
 /// Load item and champion catalogs from AppState (lazy, cached in OnceCell).
 pub async fn load_catalogs(state: &Arc<AppState>) -> (Option<&ItemCatalog>, Option<&ChampionCatalog>) {
@@ -689,11 +707,11 @@ fn invalid_api_key_message(provider: AiCoachProvider) -> &'static str {
     }
 }
 
-pub fn make_ai_stream(
+pub fn make_ai_payload_stream(
     config: Option<crate::AiCoachConfig>,
     system_prompt: String,
     user_message: String,
-) -> CoachStream {
+) -> CoachPayloadStream {
     let provider = config.as_ref().map(|c| c.provider);
     match provider {
         Some(AiCoachProvider::Anthropic) => Box::pin(make_anthropic_stream(config, system_prompt, user_message)),
@@ -704,14 +722,31 @@ pub fn make_ai_stream(
     }
 }
 
-fn make_no_config_stream() -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
+pub fn make_ai_stream(
+    config: Option<crate::AiCoachConfig>,
+    system_prompt: String,
+    user_message: String,
+) -> CoachStream {
+    let inner_stream = make_ai_payload_stream(config, system_prompt, user_message);
+
+    Box::pin(async_stream::stream! {
+        use futures::StreamExt;
+
+        let mut inner = std::pin::pin!(inner_stream);
+        while let Some(payload) = inner.next().await {
+            yield Ok(Event::default().data(
+                serde_json::to_string(&payload).unwrap()
+            ));
+        }
+    })
+}
+
+fn make_no_config_stream() -> impl Stream<Item = CoachStreamPayload> {
     async_stream::stream! {
-        yield Ok(Event::default().data(
-            serde_json::to_string(&CoachStreamPayload {
-                kind: "error".to_string(),
-                text: Some("AI Coach не настроен на сервере (не задан AI_COACH_PROVIDER и нет ключей провайдера)".to_string()),
-            }).unwrap()
-        ));
+        yield CoachStreamPayload {
+            kind: "error".to_string(),
+            text: Some("AI Coach не настроен на сервере (не задан AI_COACH_PROVIDER и нет ключей провайдера)".to_string()),
+        };
     }
 }
 
@@ -719,28 +754,24 @@ fn make_anthropic_stream(
     config: Option<crate::AiCoachConfig>,
     system_prompt: String,
     user_message: String,
-) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
+) -> impl Stream<Item = CoachStreamPayload> {
     async_stream::stream! {
         let config = match config {
             Some(c) => c,
             None => {
-                yield Ok(Event::default().data(
-                    serde_json::to_string(&CoachStreamPayload {
-                        kind: "error".to_string(),
-                        text: Some("AI Coach не настроен на сервере (ключ провайдера не задан)".to_string()),
-                    }).unwrap()
-                ));
+                yield CoachStreamPayload {
+                    kind: "error".to_string(),
+                    text: Some("AI Coach не настроен на сервере (ключ провайдера не задан)".to_string()),
+                };
                 return;
             }
         };
 
         // Emit start
-        yield Ok(Event::default().data(
-            serde_json::to_string(&CoachStreamPayload {
-                kind: "start".to_string(),
-                text: None,
-            }).unwrap()
-        ));
+        yield CoachStreamPayload {
+            kind: "start".to_string(),
+            text: None,
+        };
 
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
@@ -778,12 +809,10 @@ fn make_anthropic_stream(
             Ok(r) => r,
             Err(e) => {
                 log::error!("[coach] Ошибка соединения с Anthropic: {}", e);
-                yield Ok(Event::default().data(
-                    serde_json::to_string(&CoachStreamPayload {
-                        kind: "error".to_string(),
-                        text: Some(format!("Ошибка соединения с AI: {}", e)),
-                    }).unwrap()
-                ));
+                yield CoachStreamPayload {
+                    kind: "error".to_string(),
+                    text: Some(format!("Ошибка соединения с AI: {}", e)),
+                };
                 return;
             }
         };
@@ -797,17 +826,15 @@ fn make_anthropic_stream(
             } else {
                 format!("AI API ошибка ({}): {}", status, body_text)
             };
-            yield Ok(Event::default().data(
-                serde_json::to_string(&CoachStreamPayload {
-                    kind: "error".to_string(),
-                    text: Some(msg),
-                }).unwrap()
-            ));
+            yield CoachStreamPayload {
+                kind: "error".to_string(),
+                text: Some(msg),
+            };
             return;
         }
 
         // Read SSE stream from Anthropic line-by-line (same approach as OpenRouter).
-        let mut buffer = String::new();
+        let mut buffer = Vec::new();
         let mut last_chunk_time = Instant::now();
         let mut first_token_sent = false;
         let first_token_start = Instant::now();
@@ -819,12 +846,9 @@ fn make_anthropic_stream(
                     chunk_received.duration_since(last_chunk_time).as_secs_f32());
             }
             last_chunk_time = chunk_received;
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            buffer.extend_from_slice(&chunk);
 
-            while let Some(pos) = buffer.find('\n') {
-                let line = buffer[..pos].trim_end().to_string();
-                buffer = buffer[pos + 1..].to_string();
-
+            for line in take_complete_lines(&mut buffer) {
                 if line.is_empty() || line.starts_with("event:") {
                     continue;
                 }
@@ -845,12 +869,10 @@ fn make_anthropic_stream(
                                     log::info!("[coach] Первый токен через {:.2}s от начала ответа",
                                         first_token_start.elapsed().as_secs_f32());
                                 }
-                                yield Ok(Event::default().data(
-                                    serde_json::to_string(&CoachStreamPayload {
-                                        kind: "delta".to_string(),
-                                        text: Some(text.to_string()),
-                                    }).unwrap()
-                                ));
+                                yield CoachStreamPayload {
+                                    kind: "delta".to_string(),
+                                    text: Some(text.to_string()),
+                                };
                             }
                         }
                         if parsed.get("type").and_then(|t| t.as_str()) == Some("error") {
@@ -859,12 +881,10 @@ fn make_anthropic_stream(
                                 .and_then(|m| m.as_str())
                                 .unwrap_or("Unknown AI error");
                             log::error!("[coach] Anthropic stream error: {}", err_msg);
-                            yield Ok(Event::default().data(
-                                serde_json::to_string(&CoachStreamPayload {
-                                    kind: "error".to_string(),
-                                    text: Some(err_msg.to_string()),
-                                }).unwrap()
-                            ));
+                            yield CoachStreamPayload {
+                                kind: "error".to_string(),
+                                text: Some(err_msg.to_string()),
+                            };
                             return;
                         }
                     }
@@ -874,12 +894,10 @@ fn make_anthropic_stream(
 
         // Emit end
         log::info!("[coach] Anthropic stream completed");
-        yield Ok(Event::default().data(
-            serde_json::to_string(&CoachStreamPayload {
-                kind: "end".to_string(),
-                text: None,
-            }).unwrap()
-        ));
+        yield CoachStreamPayload {
+            kind: "end".to_string(),
+            text: None,
+        };
     }
 }
 
@@ -887,17 +905,15 @@ fn make_openai_compatible_stream(
     config: Option<crate::AiCoachConfig>,
     system_prompt: String,
     user_message: String,
-) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
+) -> impl Stream<Item = CoachStreamPayload> {
     async_stream::stream! {
         let config = match config {
             Some(c) => c,
             None => {
-                yield Ok(Event::default().data(
-                    serde_json::to_string(&CoachStreamPayload {
-                        kind: "error".to_string(),
-                        text: Some("AI Coach не настроен на сервере (ключ провайдера не задан)".to_string()),
-                    }).unwrap()
-                ));
+                yield CoachStreamPayload {
+                    kind: "error".to_string(),
+                    text: Some("AI Coach не настроен на сервере (ключ провайдера не задан)".to_string()),
+                };
                 return;
             }
         };
@@ -905,12 +921,10 @@ fn make_openai_compatible_stream(
         let provider_name = provider_display_name(provider);
 
         // Emit start
-        yield Ok(Event::default().data(
-            serde_json::to_string(&CoachStreamPayload {
-                kind: "start".to_string(),
-                text: None,
-            }).unwrap()
-        ));
+        yield CoachStreamPayload {
+            kind: "start".to_string(),
+            text: None,
+        };
 
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
@@ -965,12 +979,10 @@ fn make_openai_compatible_stream(
             Ok(r) => r,
             Err(e) => {
                 log::error!("[coach] Ошибка соединения с {}: {}", provider_name, e);
-                yield Ok(Event::default().data(
-                    serde_json::to_string(&CoachStreamPayload {
-                        kind: "error".to_string(),
-                        text: Some(format!("Ошибка соединения с AI: {}", e)),
-                    }).unwrap()
-                ));
+                yield CoachStreamPayload {
+                    kind: "error".to_string(),
+                    text: Some(format!("Ошибка соединения с AI: {}", e)),
+                };
                 return;
             }
         };
@@ -984,12 +996,10 @@ fn make_openai_compatible_stream(
             } else {
                 format!("AI API ошибка ({}): {}", status, body_text)
             };
-            yield Ok(Event::default().data(
-                serde_json::to_string(&CoachStreamPayload {
-                    kind: "error".to_string(),
-                    text: Some(msg),
-                }).unwrap()
-            ));
+            yield CoachStreamPayload {
+                kind: "error".to_string(),
+                text: Some(msg),
+            };
             return;
         }
 
@@ -997,15 +1007,12 @@ fn make_openai_compatible_stream(
         // Some providers send "data: {...}\n" with a single newline rather
         // than the double-newline that the SSE spec technically requires.
         // Waiting for "\n\n" causes massive buffering delays.
-        let mut buffer = String::new();
+        let mut buffer = Vec::new();
 
         while let Some(chunk) = response.chunk().await.ok().flatten() {
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            buffer.extend_from_slice(&chunk);
 
-            while let Some(pos) = buffer.find('\n') {
-                let line = buffer[..pos].trim_end().to_string();
-                buffer = buffer[pos + 1..].to_string();
-
+            for line in take_complete_lines(&mut buffer) {
                 if line.is_empty() || line.starts_with(':') {
                     continue;
                 }
@@ -1023,12 +1030,10 @@ fn make_openai_compatible_stream(
                             .and_then(|t| t.as_str());
                         if let Some(text) = content {
                             if !text.is_empty() {
-                                yield Ok(Event::default().data(
-                                    serde_json::to_string(&CoachStreamPayload {
-                                        kind: "delta".to_string(),
-                                        text: Some(text.to_string()),
-                                    }).unwrap()
-                                ));
+                                yield CoachStreamPayload {
+                                    kind: "delta".to_string(),
+                                    text: Some(text.to_string()),
+                                };
                             }
                         }
 
@@ -1037,12 +1042,10 @@ fn make_openai_compatible_stream(
                             .and_then(|m| m.as_str())
                         {
                             log::error!("[coach] {} stream error: {}", provider_name, err_msg);
-                            yield Ok(Event::default().data(
-                                serde_json::to_string(&CoachStreamPayload {
-                                    kind: "error".to_string(),
-                                    text: Some(err_msg.to_string()),
-                                }).unwrap()
-                            ));
+                            yield CoachStreamPayload {
+                                kind: "error".to_string(),
+                                text: Some(err_msg.to_string()),
+                            };
                             return;
                         }
                     }
@@ -1052,12 +1055,10 @@ fn make_openai_compatible_stream(
 
         // Emit end
         log::info!("[coach] {} stream completed", provider_name);
-        yield Ok(Event::default().data(
-            serde_json::to_string(&CoachStreamPayload {
-                kind: "end".to_string(),
-                text: None,
-            }).unwrap()
-        ));
+        yield CoachStreamPayload {
+            kind: "end".to_string(),
+            text: None,
+        };
     }
 }
 

@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use tauri::{Emitter, State};
 
 use crate::ai_coach::{self, CoachState, ChampionMetaInfo, ChampionAbility};
-use crate::api_client::{ServerApiClient, EnrichLiveRequest, EnrichLivePlayer};
+use crate::api_client::{EnrichLivePlayer, EnrichLiveRequest, ServerApiClient};
 use crate::db::Db;
 use crate::gold_counter::{
     CounterItemSuggestion, ItemCatalogCache, get_or_fetch_item_catalog, recommend_counter_item,
@@ -12,6 +12,7 @@ use crate::lcu;
 use crate::models::*;
 
 type SharedDb = Arc<Mutex<Db>>;
+pub type ReviewStreamStateHandle = Arc<Mutex<ReviewStreamState>>;
 
 // ─── ChampionNamesCache (чтобы не загружать DDragon каждые 15 сек) ──────────
 
@@ -44,6 +45,20 @@ pub struct LastLiveState {
 impl LastLiveState {
     pub fn new() -> Self {
         Self { data: None }
+    }
+}
+
+pub struct ReviewStreamState {
+    pub active_request_id: Option<String>,
+    pub abort_handle: Option<tokio::task::AbortHandle>,
+}
+
+impl ReviewStreamState {
+    pub fn new() -> Self {
+        Self {
+            active_request_id: None,
+            abort_handle: None,
+        }
     }
 }
 
@@ -1336,23 +1351,45 @@ pub async fn get_frequent_teammates(
 pub async fn request_post_game_review(
     app: tauri::AppHandle,
     api: State<'_, ServerApiClient>,
+    review_stream_state: State<'_, ReviewStreamStateHandle>,
     match_id: String,
     puuid: String,
     force_refresh: Option<bool>,
+    request_id: String,
 ) -> Result<(), String> {
     let force = force_refresh.unwrap_or(false);
 
+    if let Ok(mut state) = review_stream_state.lock() {
+        if let Some(handle) = state.abort_handle.take() {
+            handle.abort();
+        }
+        state.active_request_id = Some(request_id.clone());
+    }
+
     let api_client = api.inner().clone();
     let app_handle = app.clone();
+    let review_stream_state = review_stream_state.inner().clone();
+    let review_stream_state_for_task = review_stream_state.clone();
+    let request_id_for_task = request_id.clone();
 
-    tokio::spawn(async move {
-        if let Err(e) = api_client.stream_review(&app_handle, &match_id, &puuid, force).await {
-            let _ = app_handle.emit("review-stream", CoachStreamPayload {
-                kind: "review-error".to_string(),
-                text: Some(e),
-            });
+    let task = tokio::spawn(async move {
+        let _ = api_client
+            .stream_review(&app_handle, &match_id, &puuid, force, &request_id_for_task)
+            .await;
+
+        if let Ok(mut state) = review_stream_state_for_task.lock() {
+            if state.active_request_id.as_deref() == Some(&request_id_for_task) {
+                state.active_request_id = None;
+                state.abort_handle = None;
+            }
         }
     });
+
+    if let Ok(mut state) = review_stream_state.lock() {
+        if state.active_request_id.as_deref() == Some(&request_id) {
+            state.abort_handle = Some(task.abort_handle());
+        }
+    }
 
     Ok(())
 }
