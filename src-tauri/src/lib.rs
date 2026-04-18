@@ -84,6 +84,40 @@ fn create_gold_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn create_objective_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("objective-overlay") {
+        let _ = win.show();
+        sync_overlay_interactivity(app)?;
+        return Ok(());
+    }
+
+    let mut builder = WebviewWindowBuilder::new(
+        app,
+        "objective-overlay",
+        WebviewUrl::App("objective-overlay.html".into()),
+    )
+    .title("LeagueEye Objectives")
+    .inner_size(420.0, 100.0)
+    .focused(false)
+    .always_on_top(true)
+    .transparent(true)
+    .decorations(false)
+    .skip_taskbar(true)
+    .resizable(false)
+    .visible(true);
+
+    if let Some(pos) = get_saved_overlay_position(app, "objective-overlay") {
+        builder = builder.position(pos.0 as f64, pos.1 as f64);
+    }
+
+    let _win = builder
+        .build()
+        .map_err(|e| format!("Failed to create objective overlay: {}", e))?;
+
+    sync_overlay_interactivity(app)?;
+    Ok(())
+}
+
 fn hide_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("overlay") {
         win.hide().map_err(|e| e.to_string())?;
@@ -93,6 +127,13 @@ fn hide_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
 
 fn hide_gold_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("gold-overlay") {
+        win.hide().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn hide_objective_overlay_window(app: &tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("objective-overlay") {
         win.hide().map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -116,6 +157,7 @@ fn apply_overlay_interactivity(app: &tauri::AppHandle, shift_held: bool) -> Resu
     let click_through = !shift_held;
     set_overlay_click_through(app, "overlay", click_through)?;
     set_overlay_click_through(app, "gold-overlay", click_through)?;
+    set_overlay_click_through(app, "objective-overlay", click_through)?;
     Ok(())
 }
 
@@ -147,6 +189,16 @@ fn show_gold_overlay_window_if_allowed(app: &tauri::AppHandle) -> Result<bool, S
     Ok(true)
 }
 
+fn show_objective_overlay_window_if_allowed(app: &tauri::AppHandle) -> Result<bool, String> {
+    if !overlay_windows_allowed() {
+        hide_objective_overlay_window(app)?;
+        return Ok(false);
+    }
+
+    create_objective_overlay_window(app)?;
+    Ok(true)
+}
+
 #[tauri::command]
 async fn show_overlay(app: tauri::AppHandle) -> Result<bool, String> {
     show_overlay_window_if_allowed(&app)
@@ -164,20 +216,45 @@ async fn hide_overlay(app: tauri::AppHandle) -> Result<(), String> {
 
 fn get_saved_overlay_position(app: &tauri::AppHandle, overlay_id: &str) -> Option<(i32, i32)> {
     let db: tauri::State<SharedDb> = app.state();
-    let position = db.lock().ok()?.get_overlay_position(overlay_id).ok().flatten();
-    position
+    let db = match db.lock() {
+        Ok(db) => db,
+        Err(err) => {
+            log::error!("Failed to lock SQLite while restoring {overlay_id} position: {err}");
+            return None;
+        }
+    };
+
+    match db.get_overlay_position(overlay_id) {
+        Ok(position) => position,
+        Err(err) => {
+            log::error!("Failed to restore {overlay_id} position from SQLite: {err}");
+            None
+        }
+    }
 }
 
-#[tauri::command]
-async fn save_overlay_position(
-    app: tauri::AppHandle,
-    label: String,
+fn persist_overlay_position(
+    app: &tauri::AppHandle,
+    label: &str,
     x: i32,
     y: i32,
-) -> Result<(), String> {
+) {
+    if !matches!(label, "overlay" | "gold-overlay" | "objective-overlay") {
+        return;
+    }
+
     let db: tauri::State<SharedDb> = app.state();
-    let db = db.lock().map_err(|e| e.to_string())?;
-    db.save_overlay_position(&label, x, y).map_err(|e| e.to_string())
+    let db = match db.lock() {
+        Ok(db) => db,
+        Err(err) => {
+            log::error!("Failed to lock SQLite while saving {label} position: {err}");
+            return;
+        }
+    };
+
+    if let Err(err) = db.save_overlay_position(label, x, y) {
+        log::error!("Failed to save {label} position to SQLite: {err}");
+    }
 }
 
 #[tauri::command]
@@ -197,8 +274,18 @@ async fn show_gold_overlay(app: tauri::AppHandle) -> Result<bool, String> {
 }
 
 #[tauri::command]
+async fn show_objective_overlay(app: tauri::AppHandle) -> Result<bool, String> {
+    show_objective_overlay_window_if_allowed(&app)
+}
+
+#[tauri::command]
 async fn hide_gold_overlay(app: tauri::AppHandle) -> Result<(), String> {
     hide_gold_overlay_window(&app)
+}
+
+#[tauri::command]
+async fn hide_objective_overlay(app: tauri::AppHandle) -> Result<(), String> {
+    hide_objective_overlay_window(&app)
 }
 
 #[tauri::command]
@@ -206,6 +293,17 @@ async fn resize_gold_overlay(app: tauri::AppHandle, width: f64, height: f64) -> 
     if let Some(win) = app.get_webview_window("gold-overlay") {
         let w = width.max(196.0).min(400.0);
         let h = height.max(80.0).min(600.0);
+        win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(w, h)))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn resize_objective_overlay(app: tauri::AppHandle, width: f64, height: f64) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("objective-overlay") {
+        let w = width.max(340.0).min(560.0);
+        let h = height.max(70.0).min(180.0);
         win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(w, h)))
             .map_err(|e| e.to_string())?;
     }
@@ -344,6 +442,7 @@ mod keyboard_hook {
                             let overlay_shown = super::show_overlay_window_if_allowed(app).unwrap_or(false);
                             if overlay_shown {
                                 let _ = super::show_gold_overlay_window_if_allowed(app);
+                                let _ = super::show_objective_overlay_window_if_allowed(app);
                                 let _ = app.emit("hotkey-coach-trigger", ());
                             }
                         }
@@ -496,10 +595,12 @@ pub fn run() {
             get_league_window_visibility,
             hide_overlay,
             resize_overlay,
-            save_overlay_position,
             show_gold_overlay,
             hide_gold_overlay,
             resize_gold_overlay,
+            show_objective_overlay,
+            hide_objective_overlay,
+            resize_objective_overlay,
             commands::search_player,
             commands::get_mastery,
             commands::get_matches_and_stats,
@@ -517,6 +618,7 @@ pub fn run() {
             commands::request_coaching,
             commands::request_draft_advice,
             commands::get_gold_comparison,
+            commands::get_objective_summary,
             commands::get_app_version,
             commands::check_for_update,
             commands::install_update,
@@ -529,11 +631,15 @@ pub fn run() {
             commands::get_cached_review,
         ])
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" {
+            match event {
+                tauri::WindowEvent::Moved(position) => {
+                    persist_overlay_position(&window.app_handle(), window.label(), position.x, position.y);
+                }
+                tauri::WindowEvent::CloseRequested { api, .. } if window.label() == "main" => {
                     api.prevent_close();
                     let _ = window.hide();
                 }
+                _ => {}
             }
         })
         .run(tauri::generate_context!())

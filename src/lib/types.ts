@@ -245,6 +245,28 @@ export interface LaneGoldComparison {
   counterItem: CounterItemSuggestion | null;
 }
 
+// --- Objective Overlay ---
+
+export type ObjectiveKind = "tower" | "dragon" | "herald" | "baron" | "inhibitor";
+
+export interface ObjectiveMetric {
+  kind: ObjectiveKind;
+  allyCount: number;
+  enemyCount: number;
+}
+
+export interface ObjectiveEventSummary {
+  kind: ObjectiveKind;
+  text: string;
+  timestamp: number;
+}
+
+export interface ObjectiveOverlayData {
+  objectives: ObjectiveMetric[];
+  lastEvent: ObjectiveEventSummary | null;
+  gameTime: number | null;
+}
+
 // --- Matchup Stats ---
 
 export interface MatchupStat {

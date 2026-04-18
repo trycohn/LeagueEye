@@ -99,7 +99,7 @@ fn refresh_fullscreen_overlay_blocked() -> bool {
 }
 
 fn hide_overlay_windows(app: &AppHandle) {
-    for label in ["overlay", "gold-overlay"] {
+    for label in ["overlay", "gold-overlay", "objective-overlay"] {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.hide();
         }
@@ -121,7 +121,11 @@ mod platform {
     const GA_ROOT: u32 = 2;
     const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
     const PROCESS_NAME_BUFFER_LEN: usize = 512;
-    const OVERLAY_TITLES: [&str; 2] = ["leagueeye coach", "leagueeye gold"];
+    const OVERLAY_TITLES: [&str; 3] = [
+        "leagueeye coach",
+        "leagueeye gold",
+        "leagueeye objectives",
+    ];
 
     extern "system" {
         fn GetForegroundWindow() -> Hwnd;

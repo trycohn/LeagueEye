@@ -14,6 +14,7 @@ export default defineConfig({
         main: resolve(__dirname, "index.html"),
         overlay: resolve(__dirname, "overlay.html"),
         goldOverlay: resolve(__dirname, "gold-overlay.html"),
+        objectiveOverlay: resolve(__dirname, "objective-overlay.html"),
       },
     },
   },

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { LaneGoldComparison } from "../lib/types";
 import { championIconUrl, itemIconUrl } from "../lib/ddragon";
 import { RoleIcon } from "./RoleIcon";
@@ -8,12 +9,20 @@ function formatGold(gold: number): string {
   return gold.toString();
 }
 
-export function GoldLaneRow({ lane }: { lane: LaneGoldComparison }) {
+export function GoldLaneRow({
+  lane,
+  isShiftPressed,
+}: {
+  lane: LaneGoldComparison;
+  isShiftPressed: boolean;
+}) {
+  const [isCounterHovered, setIsCounterHovered] = useState(false);
   const total = lane.allyGold + lane.enemyGold;
   const allyPct = total > 0 ? (lane.allyGold / total) * 100 : 50;
   const diff = lane.goldDiff;
   const diffColor = diff > 0 ? "text-win" : diff < 0 ? "text-loss" : "text-text-muted";
   const diffText = diff > 0 ? `+${formatGold(diff)}` : diff < 0 ? formatGold(diff) : "—";
+  const isCounterZoomed = Boolean(lane.counterItem) && isShiftPressed && isCounterHovered;
   const counterTitle = lane.counterItem
     ? `Тебе против ${lane.enemyChampionName}: ${lane.counterItem.name} — ${lane.counterItem.counterReason}${lane.counterItem.buildReason ? ` • ${lane.counterItem.buildReason}` : ""}`
     : `Тебе против ${lane.enemyChampionName}: подходящий контр-предмет не определён`;
@@ -54,7 +63,9 @@ export function GoldLaneRow({ lane }: { lane: LaneGoldComparison }) {
             src={itemIconUrl(lane.counterItem.itemId)}
             alt={lane.counterItem.name}
             title={counterTitle}
-            className="w-5 h-5 rounded border border-border/70 bg-bg-secondary/70 shrink-0"
+            className={`w-5 h-5 rounded border border-border/70 bg-bg-secondary/70 shrink-0 origin-right transition-transform duration-150 ease-out ${isCounterZoomed ? "scale-200 relative z-10" : "scale-100"}`}
+            onMouseEnter={() => setIsCounterHovered(true)}
+            onMouseLeave={() => setIsCounterHovered(false)}
             onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
           />
         ) : (

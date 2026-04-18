@@ -43,13 +43,7 @@ export function OverlayApp() {
     const target = e.target as HTMLElement;
     if (!e.shiftKey || target.closest("button")) return;
     e.preventDefault();
-    const win = getCurrentWindow();
-    await win.startDragging();
-    // Save position after drag ends
-    try {
-      const pos = await win.outerPosition();
-      await invoke("save_overlay_position", { label: "overlay", x: pos.x, y: pos.y });
-    } catch { /* ignore */ }
+    await getCurrentWindow().startDragging();
   }
 
   function handleClose() {

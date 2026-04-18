@@ -128,14 +128,15 @@ export default function App() {
       }
 
       const showOverlays = async () => {
-        const [overlayShown, goldOverlayShown] = await Promise.all([
+        const [overlayShown, goldOverlayShown, objectiveOverlayShown] = await Promise.all([
           invoke<boolean>("show_overlay").catch(() => false),
           invoke<boolean>("show_gold_overlay").catch(() => false),
+          invoke<boolean>("show_objective_overlay").catch(() => false),
         ]);
 
         if (cancelled) return;
 
-        overlayShownRef.current = overlayShown || goldOverlayShown;
+        overlayShownRef.current = overlayShown || goldOverlayShown || objectiveOverlayShown;
         if (!overlayShownRef.current && !overlayRetryTimerRef.current) {
           overlayRetryTimerRef.current = setTimeout(() => {
             overlayRetryTimerRef.current = null;
@@ -159,6 +160,7 @@ export default function App() {
       overlayShownRef.current = false;
       invoke("hide_overlay").catch(() => {});
       invoke("hide_gold_overlay").catch(() => {});
+      invoke("hide_objective_overlay").catch(() => {});
     }
     return () => {
       cancelled = true;

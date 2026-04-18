@@ -684,6 +684,7 @@ pub struct LiveEvents {
 #[serde(rename_all = "PascalCase")]
 #[allow(dead_code)]
 pub struct LiveEventEntry {
+    pub event_id: Option<i64>,
     pub event_name: Option<String>,
     pub event_time: Option<f64>,
     pub killer_name: Option<String>,
@@ -691,6 +692,7 @@ pub struct LiveEventEntry {
     pub assisters: Option<Vec<String>>,
     pub dragon_type: Option<String>,
     pub turret_killed: Option<String>,
+    pub inhib_killed: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

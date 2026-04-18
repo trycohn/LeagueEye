@@ -98,6 +98,7 @@ export function positionName(position: string): string {
 }
 
 const CDRAGON_BASE = "https://raw.communitydragon.org/latest/plugins";
+const CDRAGON_GAME_UX_BASE = "https://raw.communitydragon.org/latest/game/assets/ux";
 
 export function positionIconUrl(position: string): string {
   const key = position.toLowerCase();
@@ -115,6 +116,18 @@ export function positionIconUrl(position: string): string {
 export function rankEmblemUrl(tier: string): string {
   const t = tier.toLowerCase();
   return `${CDRAGON_BASE}/rcp-fe-lol-static-assets/global/default/images/ranked-emblem/emblem-${t}.png`;
+}
+
+export function objectiveIconUrl(kind: string): string {
+  const map: Record<string, string> = {
+    tower: "tower.png",
+    dragon: "dragon.png",
+    herald: "riftherald.png",
+    baron: "baron.png",
+    inhibitor: "inhibitor.png",
+  };
+  const file = map[kind] || "tower.png";
+  return `${CDRAGON_GAME_UX_BASE}/minimap/icons/${file}`;
 }
 
 export function formatDuration(seconds: number): string {

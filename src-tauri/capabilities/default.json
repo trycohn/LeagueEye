@@ -5,7 +5,8 @@
   "windows": [
     "main",
     "overlay",
-    "gold-overlay"
+    "gold-overlay",
+    "objective-overlay"
   ],
   "permissions": [
     "core:default",

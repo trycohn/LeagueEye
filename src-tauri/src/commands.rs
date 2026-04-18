@@ -1290,6 +1290,305 @@ pub async fn get_gold_comparison(
     Ok(GoldComparisonData { lanes, game_time })
 }
 
+// ─── get_objective_summary ──────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectiveOverlayData {
+    pub objectives: Vec<ObjectiveMetric>,
+    pub last_event: Option<ObjectiveEventSummary>,
+    pub game_time: Option<i64>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectiveMetric {
+    pub kind: String,
+    pub ally_count: i32,
+    pub enemy_count: i32,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectiveEventSummary {
+    pub kind: String,
+    pub text: String,
+    pub timestamp: i64,
+}
+
+#[derive(Default)]
+struct ObjectiveCounter {
+    ally: i32,
+    enemy: i32,
+}
+
+const OBJECTIVE_ORDER: [&str; 5] = ["tower", "dragon", "herald", "baron", "inhibitor"];
+
+#[tauri::command]
+pub async fn get_objective_summary() -> Result<ObjectiveOverlayData, String> {
+    let alldata = lcu::get_live_client_allgamedata().await
+        .map_err(|_| "Live Client API недоступен".to_string())?;
+
+    let players = alldata.all_players.as_ref().ok_or("Нет данных игроков")?;
+    let events: &[lcu::LiveEventEntry] = alldata
+        .events
+        .as_ref()
+        .and_then(|live_events| live_events.events.as_ref())
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+
+    let game_time = alldata
+        .game_data
+        .as_ref()
+        .and_then(|game| game.game_time.map(|t| t as i64));
+
+    let creds = lcu::detect_lcu_credentials().ok_or("League Client не запущен")?;
+    let identity = lcu::get_lcu_identity(&creds)
+        .await
+        .map_err(|e| format!("Не удалось определить игрока: {e}"))?;
+
+    let me_player = players.iter().find(|player| {
+        player.riot_id_game_name.as_deref() == Some(&identity.game_name)
+            || player.summoner_name.as_deref() == Some(&identity.game_name)
+    });
+
+    let my_team_str = me_player
+        .and_then(|player| player.team.clone())
+        .unwrap_or_else(|| "ORDER".to_string());
+
+    let mut player_teams: HashMap<String, String> = HashMap::new();
+    for player in players {
+        let Some(team) = player.team.clone() else {
+            continue;
+        };
+
+        if let Some(name) = player.summoner_name.as_deref() {
+            player_teams.insert(normalize_live_name(name), team.clone());
+        }
+        if let Some(game_name) = player.riot_id_game_name.as_deref() {
+            player_teams.insert(normalize_live_name(game_name), team.clone());
+
+            if let Some(tag_line) = player.riot_id_tag_line.as_deref() {
+                player_teams.insert(
+                    normalize_live_name(&format!("{game_name}#{tag_line}")),
+                    team.clone(),
+                );
+            }
+        }
+    }
+
+    let mut counters: HashMap<&'static str, ObjectiveCounter> = OBJECTIVE_ORDER
+        .iter()
+        .map(|kind| (*kind, ObjectiveCounter::default()))
+        .collect();
+    let mut last_event = None;
+
+    for event in events {
+        let Some(event_name) = event.event_name.as_deref() else {
+            continue;
+        };
+        let Some(kind) = resolve_objective_event_kind(event_name, event) else {
+            continue;
+        };
+        let Some(taker_is_ally) = objective_taken_by_ally(kind, event, &player_teams, &my_team_str) else {
+            continue;
+        };
+
+        if let Some(counter) = counters.get_mut(kind) {
+            if taker_is_ally {
+                counter.ally += 1;
+            } else {
+                counter.enemy += 1;
+            }
+        }
+
+        let timestamp = event.event_time.unwrap_or(0.0) as i64;
+        last_event = Some(ObjectiveEventSummary {
+            kind: kind.to_string(),
+            text: format_objective_event_text(kind, taker_is_ally, event),
+            timestamp,
+        });
+    }
+
+    let objectives = OBJECTIVE_ORDER
+        .iter()
+        .map(|kind| {
+            let (ally_count, enemy_count) = counters
+                .get(kind)
+                .map(|counter| (counter.ally, counter.enemy))
+                .unwrap_or((0, 0));
+            ObjectiveMetric {
+                kind: (*kind).to_string(),
+                ally_count,
+                enemy_count,
+            }
+        })
+        .collect();
+
+    Ok(ObjectiveOverlayData {
+        objectives,
+        last_event,
+        game_time,
+    })
+}
+
+fn normalize_live_name(name: &str) -> String {
+    name.trim().to_ascii_lowercase()
+}
+
+fn resolve_objective_event_kind(
+    event_name: &str,
+    event: &lcu::LiveEventEntry,
+) -> Option<&'static str> {
+    let event_name = event_name.trim().to_ascii_uppercase();
+
+    match event_name.as_str() {
+        "TURRETKILLED" => Some("tower"),
+        "INHIBKILLED" => Some("inhibitor"),
+        "DRAGONKILL" => Some("dragon"),
+        "HERALDKILL" | "RIFTHERALDKILL" => Some("herald"),
+        "BARONKILL" => Some("baron"),
+        _ if event.turret_killed.is_some() => Some("tower"),
+        _ if event.inhib_killed.is_some() => Some("inhibitor"),
+        _ => None,
+    }
+}
+
+fn objective_taken_by_ally(
+    kind: &str,
+    event: &lcu::LiveEventEntry,
+    player_teams: &HashMap<String, String>,
+    my_team_str: &str,
+) -> Option<bool> {
+    match kind {
+        "tower" => event
+            .turret_killed
+            .as_deref()
+            .and_then(structure_team_from_name)
+            .map(|team| team != my_team_str),
+        "inhibitor" => event
+            .inhib_killed
+            .as_deref()
+            .and_then(structure_team_from_name)
+            .map(|team| team != my_team_str),
+        _ => event
+            .killer_name
+            .as_deref()
+            .and_then(|killer| player_teams.get(&normalize_live_name(killer)))
+            .map(|team| team == my_team_str),
+    }
+}
+
+fn structure_team_from_name(structure_name: &str) -> Option<&'static str> {
+    let structure_name = structure_name.trim().to_ascii_uppercase();
+
+    if structure_name.contains("T1") || structure_name.contains("ORDER") || structure_name.contains("BLUE") {
+        Some("ORDER")
+    } else if structure_name.contains("T2") || structure_name.contains("CHAOS") || structure_name.contains("RED") {
+        Some("CHAOS")
+    } else {
+        None
+    }
+}
+
+fn format_objective_event_text(
+    kind: &str,
+    taker_is_ally: bool,
+    event: &lcu::LiveEventEntry,
+) -> String {
+    let event_time = event.event_time.unwrap_or(0.0);
+    let mins = (event_time / 60.0) as i32;
+    let secs = (event_time % 60.0) as i32;
+    let team = if taker_is_ally { "Мы" } else { "Враги" };
+
+    let action = match kind {
+        "tower" => "сломали башню".to_string(),
+        "inhibitor" => "сломали ингибитор".to_string(),
+        "dragon" => format!("забрали {}", localize_dragon_type(event.dragon_type.as_deref())),
+        "herald" => "забрали герольда".to_string(),
+        "baron" => "забрали барона".to_string(),
+        _ => "взяли объект".to_string(),
+    };
+
+    format!("{mins}:{secs:02} {team} {action}")
+}
+
+fn localize_dragon_type(dragon_type: Option<&str>) -> String {
+    let Some(dragon_type) = dragon_type.map(|kind| kind.trim().to_ascii_uppercase()) else {
+        return "дракона".to_string();
+    };
+
+    match dragon_type.as_str() {
+        "AIR" | "CLOUD" | "WIND" => "воздушного дракона".to_string(),
+        "EARTH" | "MOUNTAIN" => "горного дракона".to_string(),
+        "WATER" | "OCEAN" => "водного дракона".to_string(),
+        "FIRE" | "INFERNAL" => "огненного дракона".to_string(),
+        "HEXTECH" => "хекстекового дракона".to_string(),
+        "CHEMTECH" => "химтекового дракона".to_string(),
+        "ELDER" => "старшего дракона".to_string(),
+        _ => "дракона".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod objective_tests {
+    use super::{
+        format_objective_event_text, localize_dragon_type, resolve_objective_event_kind,
+        structure_team_from_name,
+    };
+    use crate::lcu::LiveEventEntry;
+
+    fn sample_event(event_name: &str) -> LiveEventEntry {
+        LiveEventEntry {
+            event_id: Some(1),
+            event_name: Some(event_name.to_string()),
+            event_time: Some(623.0),
+            killer_name: Some("Tester".to_string()),
+            recipient: None,
+            assisters: None,
+            dragon_type: None,
+            turret_killed: None,
+            inhib_killed: None,
+        }
+    }
+
+    #[test]
+    fn resolves_objective_event_kind_from_name_and_payload() {
+        let mut tower_event = sample_event("TurretKilled");
+        assert_eq!(resolve_objective_event_kind("TurretKilled", &tower_event), Some("tower"));
+
+        let mut inhibitor_event = sample_event("Unknown");
+        inhibitor_event.inhib_killed = Some("Barracks_T2_C1".to_string());
+        assert_eq!(resolve_objective_event_kind("Unknown", &inhibitor_event), Some("inhibitor"));
+
+        tower_event.dragon_type = Some("Fire".to_string());
+        assert_eq!(resolve_objective_event_kind("DragonKill", &tower_event), Some("dragon"));
+    }
+
+    #[test]
+    fn infers_structure_team_from_common_live_names() {
+        assert_eq!(structure_team_from_name("Turret_T1_C_05_A"), Some("ORDER"));
+        assert_eq!(structure_team_from_name("Barracks_T2_C1"), Some("CHAOS"));
+        assert_eq!(structure_team_from_name("MysteryStructure"), None);
+    }
+
+    #[test]
+    fn formats_short_objective_event_text() {
+        let mut dragon_event = sample_event("DragonKill");
+        dragon_event.dragon_type = Some("Chemtech".to_string());
+
+        assert_eq!(localize_dragon_type(Some("Fire")), "огненного дракона");
+        assert_eq!(
+            format_objective_event_text("dragon", true, &dragon_event),
+            "10:23 Мы забрали химтекового дракона"
+        );
+        assert_eq!(
+            format_objective_event_text("tower", false, &dragon_event),
+            "10:23 Враги сломали башню"
+        );
+    }
+}
+
 // ─── get_app_version ─────────────────────────────────────────────────────────
 
 // ─── Favorites ──────────────────────────────────────────────────────────────

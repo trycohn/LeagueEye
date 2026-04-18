@@ -1,21 +1,27 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { GoldLaneRow } from "./GoldLaneRow";
-import { Coins, X, Loader2 } from "lucide-react";
-import type { GoldComparisonData } from "../lib/types";
+import { Flag, Loader2, X } from "lucide-react";
+import { objectiveIconUrl } from "../lib/ddragon";
+import type { ObjectiveKind, ObjectiveOverlayData } from "../lib/types";
 
 const POLL_INTERVAL = 4_000;
-const OVERLAY_WIDTH = 226;
+const OVERLAY_WIDTH = 420;
+const OBJECTIVE_LABELS: Record<ObjectiveKind, string> = {
+  tower: "Башни",
+  dragon: "Драконы",
+  herald: "Герольд",
+  baron: "Барон",
+  inhibitor: "Ингибы",
+};
 
-export function GoldOverlayApp() {
-  const [data, setData] = useState<GoldComparisonData | null>(null);
+export function ObjectiveOverlayApp() {
+  const [data, setData] = useState<ObjectiveOverlayData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [isShiftPressed, setIsShiftPressed] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const mountedRef = useRef(true);
-  const dataRef = useRef<GoldComparisonData | null>(null);
+  const dataRef = useRef<ObjectiveOverlayData | null>(null);
   const pollingRef = useRef(false);
   const requestIdRef = useRef(0);
 
@@ -31,7 +37,7 @@ export function GoldOverlayApp() {
         setLoading(true);
       }
 
-      const result = await invoke<GoldComparisonData>("get_gold_comparison");
+      const result = await invoke<ObjectiveOverlayData>("get_objective_summary");
 
       if (mountedRef.current && requestId === requestIdRef.current) {
         dataRef.current = result;
@@ -59,43 +65,18 @@ export function GoldOverlayApp() {
   }, []);
 
   useEffect(() => {
-    function syncShiftFromKeyboard(event: KeyboardEvent) {
-      setIsShiftPressed(event.shiftKey);
-    }
-
-    function syncShiftFromPointer(event: MouseEvent) {
-      setIsShiftPressed((prev) => (prev === event.shiftKey ? prev : event.shiftKey));
-    }
-
-    function resetShiftState() {
-      setIsShiftPressed(false);
-    }
-
-    window.addEventListener("keydown", syncShiftFromKeyboard);
-    window.addEventListener("keyup", syncShiftFromKeyboard);
-    window.addEventListener("mousemove", syncShiftFromPointer);
-    window.addEventListener("blur", resetShiftState);
-
-    return () => {
-      window.removeEventListener("keydown", syncShiftFromKeyboard);
-      window.removeEventListener("keyup", syncShiftFromKeyboard);
-      window.removeEventListener("mousemove", syncShiftFromPointer);
-      window.removeEventListener("blur", resetShiftState);
-    };
-  }, []);
-
-  useEffect(() => {
     void fetchData();
     const timer = setInterval(() => {
       void fetchData();
     }, POLL_INTERVAL);
+
     return () => clearInterval(timer);
   }, [fetchData]);
 
   const updateSize = useCallback(() => {
     if (!contentRef.current) return;
-    const h = Math.ceil(contentRef.current.getBoundingClientRect().height);
-    invoke("resize_gold_overlay", { width: OVERLAY_WIDTH, height: h }).catch(() => {});
+    const height = Math.ceil(contentRef.current.getBoundingClientRect().height);
+    invoke("resize_objective_overlay", { width: OVERLAY_WIDTH, height }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -119,6 +100,8 @@ export function GoldOverlayApp() {
     getCurrentWindow().hide();
   }
 
+  const metrics = data?.objectives ?? [];
+
   return (
     <div ref={contentRef} onMouseDown={handleMouseDown} className="select-none">
       <div
@@ -127,23 +110,26 @@ export function GoldOverlayApp() {
       >
         <div className="flex items-center justify-between px-2.5 py-1 border-b border-border/50">
           <div className="flex items-center gap-1.5">
-            <Coins size={13} className="text-text-muted shrink-0 opacity-60" />
+            <Flag size={13} className="text-text-muted shrink-0 opacity-65" />
             <span className="text-[10px] font-medium text-text-muted opacity-70 tracking-wide uppercase">
-              gold
+              objectives
             </span>
           </div>
-          <button
-            onClick={handleClose}
-            className="p-1 rounded hover:bg-bg-hover/50 text-text-muted hover:text-text-primary transition-colors"
-          >
-            <X size={12} />
-          </button>
+          <div className="flex items-center gap-2">
+            <span className="text-[9px] text-text-muted/80 uppercase tracking-wide">мы : враги</span>
+            <button
+              onClick={handleClose}
+              className="p-1 rounded hover:bg-bg-hover/50 text-text-muted hover:text-text-primary transition-colors"
+            >
+              <X size={12} />
+            </button>
+          </div>
         </div>
 
         <div className="px-2.5 py-2">
           {loading && !data && (
             <div className="flex items-center gap-2 py-2 justify-center">
-              <Loader2 size={14} className="animate-spin text-gold" />
+              <Loader2 size={14} className="animate-spin text-accent" />
               <span className="text-xs text-text-muted">Загрузка...</span>
             </div>
           )}
@@ -152,18 +138,41 @@ export function GoldOverlayApp() {
             <p className="text-xs text-loss text-center py-2">{error}</p>
           )}
 
-          {data && data.lanes.length > 0 && (
+          {data && (
             <div className="flex flex-col gap-1.5">
-              {data.lanes.map((lane) => (
-                <GoldLaneRow key={lane.role} lane={lane} isShiftPressed={isShiftPressed} />
-              ))}
-            </div>
-          )}
+              <div className="grid grid-cols-5 gap-1.5">
+                {metrics.map((metric) => (
+                  <div
+                    key={metric.kind}
+                    title={OBJECTIVE_LABELS[metric.kind]}
+                    className="flex items-center justify-center gap-1 rounded-lg border border-border/60 bg-bg-secondary/40 px-1.5 py-1.5 min-w-0"
+                  >
+                    <img
+                      src={objectiveIconUrl(metric.kind)}
+                      alt={OBJECTIVE_LABELS[metric.kind]}
+                      className="w-4 h-4 shrink-0 opacity-90"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = "none";
+                      }}
+                    />
+                    <div className="flex items-center gap-0.5 text-[10px] font-semibold tabular-nums leading-none">
+                      <span className="text-win">{metric.allyCount}</span>
+                      <span className="text-text-muted/80">:</span>
+                      <span className="text-loss">{metric.enemyCount}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
 
-          {data && data.lanes.length === 0 && (
-            <p className="text-xs text-text-muted text-center py-2">
-              Ожидание данных о ролях...
-            </p>
+              <div className="rounded-lg border border-border/40 bg-bg-secondary/25 px-2 py-1">
+                <p
+                  className="text-[10px] leading-tight text-text-secondary truncate"
+                  title={data.lastEvent?.text ?? "Ожидание первого объекта..."}
+                >
+                  {data.lastEvent?.text ?? "Ожидание первого объекта..."}
+                </p>
+              </div>
+            </div>
           )}
         </div>
       </div>
